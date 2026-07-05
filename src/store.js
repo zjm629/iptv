@@ -30,6 +30,27 @@ function createInitialStatus() {
   };
 }
 
+function normalizeSources(sources) {
+  if (!Array.isArray(sources)) {
+    throw new Error("Sources must be an array");
+  }
+
+  return sources.map((source) => {
+    const name = String(source?.name || "").trim();
+    const url = String(source?.url || "").trim();
+
+    if (!url) {
+      throw new Error("Source URL is required");
+    }
+
+    return { name, url };
+  });
+}
+
+async function readSources(configPath) {
+  return normalizeSources(await readJson(configPath, []));
+}
+
 function mergeEntries(entries) {
   const byKey = new Map();
 
@@ -100,7 +121,7 @@ export function createStore(options = {}) {
 
   async function runRefresh() {
     status = { ...status, refreshing: true };
-    const configuredSources = await readJson(configPath, []);
+    const configuredSources = await readSources(configPath);
     const entries = [];
     const sourceStatuses = [];
 
@@ -162,6 +183,15 @@ export function createStore(options = {}) {
   return {
     async load() {
       await loadCache();
+    },
+    getSources() {
+      return readSources(configPath);
+    },
+    async saveSources(sources) {
+      const normalizedSources = normalizeSources(sources);
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(normalizedSources, null, 2)}\n`, "utf8");
+      return normalizedSources;
     },
     refresh() {
       if (!refreshPromise) {

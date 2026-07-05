@@ -13,6 +13,40 @@ async function createTempConfig(sources) {
 }
 
 describe("createStore", () => {
+  test("reads configured sources", async () => {
+    const { configPath, cachePath } = await createTempConfig([
+      { name: "Source A", url: " http://source-a.example/list.m3u " }
+    ]);
+
+    const store = createStore({ configPath, cachePath, fetchImpl: jest.fn() });
+
+    await expect(store.getSources()).resolves.toEqual([
+      { name: "Source A", url: "http://source-a.example/list.m3u" }
+    ]);
+  });
+
+  test("saves validated sources to config", async () => {
+    const { configPath, cachePath } = await createTempConfig([]);
+    const store = createStore({ configPath, cachePath, fetchImpl: jest.fn() });
+
+    await store.saveSources([
+      { name: "  Source A  ", url: " http://source-a.example/list.m3u " },
+      { name: "", url: "http://source-b.example/list.m3u" }
+    ]);
+
+    expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual([
+      { name: "Source A", url: "http://source-a.example/list.m3u" },
+      { name: "", url: "http://source-b.example/list.m3u" }
+    ]);
+  });
+
+  test("rejects sources without urls", async () => {
+    const { configPath, cachePath } = await createTempConfig([]);
+    const store = createStore({ configPath, cachePath, fetchImpl: jest.fn() });
+
+    await expect(store.saveSources([{ name: "Broken", url: " " }])).rejects.toThrow("Source URL is required");
+  });
+
   test("reads json config files that contain a utf-8 bom", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "iptv-store-"));
     const configPath = path.join(dir, "sources.json");

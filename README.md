@@ -1,58 +1,64 @@
 # IPTV M3U Manager
 
-一个适合部署到 VPS 的 IPTV M3U 管理服务。它可以定时抓取一个或多个远程 M3U 地址，自动合并重复频道，并保留同一频道的多条线路。
+一个适合部署到 VPS 的 IPTV M3U 管理服务。它可以从网页填写一个或多个远程 M3U 采集地址，自动合并重复频道，并输出你自己的去重 M3U 地址。
 
 ## 功能
 
 - Docker Compose 一键部署。
 - 默认端口 `3080`。
+- 在网页里新增、修改、删除采集源。
+- 保存采集源后立即刷新。
 - 启动时立即更新，之后每 2 小时自动更新一次。
 - 多个 M3U 源统一归并，同名频道只显示一个。
 - 同一频道保留多条线路，可在网页里自由选择。
 - 提供去重后的播放列表地址 `/playlist.m3u`。
 
-## 配置源
-
-编辑 `config/sources.json`：
-
-```json
-[
-  {
-    "name": "Chongqing Source",
-    "url": "http://iptv.cqshushu.com/index.php?s=nwleGqYlX1QGiI3Av2MM8A&t=multicast&channels=1&format=m3u"
-  }
-]
-```
-
-添加多个源时，继续往数组里追加：
-
-```json
-[
-  {
-    "name": "Source A",
-    "url": "https://example.com/a.m3u"
-  },
-  {
-    "name": "Source B",
-    "url": "https://example.com/b.m3u"
-  }
-]
-```
-
 ## 部署到 VPS
 
-在 VPS 上安装 Docker 和 Docker Compose 后，把本项目上传到 VPS，例如放到 `/opt/iptv-manager`。
-
-进入目录：
+下面以 `/root/iptv` 为例：
 
 ```bash
-cd /opt/iptv-manager
+cd /root
+git clone https://github.com/zjm629/iptv.git
+cd /root/iptv
+docker compose up -d --build
 ```
 
-启动：
+如果 VPS 开了防火墙，放行端口：
 
 ```bash
-docker compose up -d --build
+ufw allow 3080/tcp
+```
+
+云服务器控制台里的安全组也需要放行 `3080` 端口。
+
+## 使用
+
+打开管理页：
+
+```text
+http://你的VPS-IP:3080
+```
+
+在页面的“采集源”区域填写：
+
+- 名称：可选，例如 `重庆源`
+- M3U 地址：必填，例如 `http://example.com/list.m3u`
+
+可以添加多个采集源。点击“保存并刷新”后，服务会写入配置并立即抓取频道。
+
+IPTV 播放器里填写你的输出地址：
+
+```text
+http://你的VPS-IP:3080/playlist.m3u
+```
+
+## 常用命令
+
+进入项目目录：
+
+```bash
+cd /root/iptv
 ```
 
 查看日志：
@@ -61,33 +67,42 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-访问管理页：
+重启：
 
-```text
-http://你的VPS-IP:3080
+```bash
+docker compose restart
 ```
 
-IPTV 播放器里填写：
+停止：
 
-```text
-http://你的VPS-IP:3080/playlist.m3u
+```bash
+docker compose down
+```
+
+更新代码：
+
+```bash
+git pull
+docker compose up -d --build
 ```
 
 ## 常用接口
 
 - `GET /`：Web 管理页。
 - `GET /playlist.m3u`：去重后的播放列表。
+- `GET /api/sources`：当前采集源。
+- `PUT /api/sources`：保存采集源并刷新。
 - `GET /api/channels`：频道和线路 JSON。
 - `GET /api/status`：刷新状态和源状态。
 - `POST /api/refresh`：手动刷新。
 - `GET /play/:channelId?source=0`：播放指定频道线路。
 
-## 更新源配置
+## 配置文件
 
-修改 `config/sources.json` 后，可以在网页点击刷新，也可以重启容器：
+网页保存的采集源会写入：
 
-```bash
-docker compose restart
+```text
+config/sources.json
 ```
 
-服务会继续每 2 小时自动刷新一次。
+这个目录已经通过 `docker-compose.yml` 挂载到容器里，所以容器重建后配置仍会保留。

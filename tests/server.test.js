@@ -18,6 +18,8 @@ function createFakeStore() {
 
   return {
     refresh: jest.fn(async () => ({ ok: true })),
+    getSources: jest.fn(async () => [{ name: "A", url: "http://a.example/list.m3u" }]),
+    saveSources: jest.fn(async (sources) => sources),
     getChannels: () => channels,
     getChannel: (id) => channels.find((channel) => channel.id === id) || null,
     getStatus: () => ({
@@ -66,11 +68,42 @@ describe("server routes", () => {
     expect(response.body.channelCount).toBe(1);
   });
 
+  test("returns configured sources", async () => {
+    const response = await request(createApp(createFakeStore())).get("/api/sources");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([{ name: "A", url: "http://a.example/list.m3u" }]);
+  });
+
+  test("saves sources and refreshes immediately", async () => {
+    const store = createFakeStore();
+    const sources = [{ name: "B", url: "http://b.example/list.m3u" }];
+    const response = await request(createApp(store)).put("/api/sources").send({ sources });
+
+    expect(response.status).toBe(200);
+    expect(store.saveSources).toHaveBeenCalledWith(sources);
+    expect(store.refresh).toHaveBeenCalledTimes(1);
+    expect(response.body.sources).toEqual(sources);
+  });
+
+  test("rejects invalid source payloads", async () => {
+    const store = createFakeStore();
+    store.saveSources.mockRejectedValueOnce(new Error("Source URL is required"));
+
+    const response = await request(createApp(store))
+      .put("/api/sources")
+      .send({ sources: [{ name: "Broken", url: "" }] });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe("Source URL is required");
+  });
+
   test("returns web management page", async () => {
     const response = await request(createApp(createFakeStore())).get("/");
 
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("text/html");
     expect(response.text).toContain("IPTV M3U Manager");
+    expect(response.text).toContain("source-editor");
   });
 });

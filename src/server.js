@@ -26,6 +26,24 @@ export function createApp(store) {
     res.json(store.getChannels());
   });
 
+  app.get("/api/sources", async (_req, res, next) => {
+    try {
+      res.json(await store.getSources());
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.put("/api/sources", async (req, res) => {
+    try {
+      const sources = await store.saveSources(req.body?.sources);
+      await store.refresh();
+      res.json({ sources, status: store.getStatus() });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
   app.post("/api/refresh", async (_req, res, next) => {
     try {
       await store.refresh();
