@@ -48,7 +48,7 @@ export function renderHomePage() {
     }
     .toolbar {
       display: grid;
-      grid-template-columns: 1fr auto auto auto auto;
+      grid-template-columns: 1fr repeat(7, auto);
       gap: 10px;
     }
     input, button {
@@ -155,6 +155,10 @@ export function renderHomePage() {
       <a id="playlist" href="/playlist.m3u">playlist.m3u</a>
       <a id="playlist-sources" href="/playlist-sources.m3u">playlist-sources.m3u</a>
       <a id="playlist-json" href="/playlist.json">playlist.json</a>
+      <a id="live-txt" href="/live.txt">live.txt</a>
+      <a id="tvbox-json" href="/tvbox.json">tvbox.json</a>
+      <a id="tvbox-direct-json" href="/tvbox-direct.json">tvbox-direct.json</a>
+      <a id="warehouse-json" href="/warehouse.json">warehouse.json</a>
     </section>
     <section class="status" id="status"></section>
     <section class="channels" id="channels"></section>

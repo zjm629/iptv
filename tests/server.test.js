@@ -89,6 +89,103 @@ describe("server routes", () => {
     });
   });
 
+  test("returns TVBox live txt with grouped channels and merged source links", async () => {
+    const response = await request(createApp(createFakeStore()))
+      .get("/live.txt")
+      .set("Host", "vps.example:3080");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/plain");
+    expect(response.text).toContain("CCTV,#genre#");
+    expect(response.text).toContain(
+      "CCTV-1,$[A]http://vps.example:3080/play/cctv1?source=0#$[B]http://vps.example:3080/play/cctv1?source=1"
+    );
+  });
+
+  test("returns full TVBox config pointing lives to the live txt proxy", async () => {
+    const response = await request(createApp(createFakeStore()))
+      .get("/tvbox.json")
+      .set("Host", "vps.example:3080");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      sites: [],
+      lives: [
+        {
+          group: "redirect",
+          channels: [
+            {
+              name: "IPTV",
+              urls: [
+                "proxy://do=live&type=txt&ext=http://vps.example:3080/live.txt"
+              ]
+            }
+          ]
+        }
+      ],
+      parses: [],
+      flags: []
+    });
+  });
+
+  test("returns full TVBox config with direct live channels", async () => {
+    const response = await request(createApp(createFakeStore()))
+      .get("/tvbox-direct.json")
+      .set("Host", "vps.example:3080");
+
+    expect(response.status).toBe(200);
+    expect(response.body.lives[0].group).toBe("CCTV");
+    expect(response.body.lives[0].channels[0].name).toBe("CCTV-1");
+    expect(response.body.lives[0].channels[0].urls).toEqual([
+      "$[A]http://vps.example:3080/play/cctv1?source=0#$[B]http://vps.example:3080/play/cctv1?source=1"
+    ]);
+    expect(response.body.sites).toEqual([]);
+  });
+
+  test("returns yingshicang warehouse config without translated field names", async () => {
+    const response = await request(createApp(createFakeStore()))
+      .get("/warehouse.json")
+      .set("Host", "vps.example:3080");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      urls: [
+        {
+          name: "IPTV直播",
+          url: "http://vps.example:3080/tvbox.json"
+        }
+      ]
+    });
+  });
+
+  test("TVBox JSON endpoints only use English schema keys", async () => {
+    const app = createApp(createFakeStore());
+    const endpoints = ["/playlist.json", "/tvbox.json", "/tvbox-direct.json", "/warehouse.json"];
+    const allowedKeys = new Set(["lives", "group", "channels", "name", "urls", "sites", "parses", "flags", "url"]);
+    const forbiddenKeys = new Set(["生活", "分组", "频道", "名称", "网址", "链接"]);
+
+    function walk(value) {
+      if (Array.isArray(value)) {
+        value.forEach(walk);
+        return;
+      }
+      if (!value || typeof value !== "object") {
+        return;
+      }
+      for (const key of Object.keys(value)) {
+        expect(forbiddenKeys.has(key)).toBe(false);
+        expect(allowedKeys.has(key)).toBe(true);
+        walk(value[key]);
+      }
+    }
+
+    for (const endpoint of endpoints) {
+      const response = await request(app).get(endpoint).set("Host", "vps.example:3080");
+      expect(response.status).toBe(200);
+      walk(response.body);
+    }
+  });
+
   test("redirects channel playback to requested source line", async () => {
     const response = await request(createApp(createFakeStore())).get("/play/cctv1?source=1");
 
@@ -144,5 +241,7 @@ describe("server routes", () => {
     expect(response.text).toContain("source-editor");
     expect(response.text).toContain("playlist-sources.m3u");
     expect(response.text).toContain("playlist.json");
+    expect(response.text).toContain("tvbox.json");
+    expect(response.text).toContain("warehouse.json");
   });
 });

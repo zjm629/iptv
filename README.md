@@ -14,6 +14,7 @@
 - 提供去重后的播放列表地址 `/playlist.m3u`。
 - 提供电视 APP 多信号源播放列表地址 `/playlist-sources.m3u`。
 - 提供影视仓风格 JSON 多源地址 `/playlist.json`。
+- 提供影视仓/TVBox 整仓配置地址 `/warehouse.json` 和 `/tvbox.json`。
 
 ## 部署到 VPS
 
@@ -69,19 +70,46 @@ http://你的VPS-IP:3080/playlist-sources.m3u
 http://你的VPS-IP:3080/playlist.json
 ```
 
-这个地址每个频道只出现一次，`urls` 里会用 `#` 拼接多条线路，并用 `$[源名]` 标注线路名。
+如果你用的是影视仓，建议优先在“配置/接口/仓库”里填写：
+
+```text
+http://你的VPS-IP:3080/warehouse.json
+```
+
+如果影视仓要求填写 TVBox 配置地址，可以填写：
+
+```text
+http://你的VPS-IP:3080/tvbox.json
+```
+
+`/tvbox.json` 会通过 `proxy://do=live&type=txt&ext=...` 指向 `/live.txt`。如果你的版本不支持 proxy 直播入口，再尝试：
+
+```text
+http://你的VPS-IP:3080/tvbox-direct.json
+```
+
+这些 JSON 的结构键名固定为英文，例如 `lives`、`group`、`channels`、`name`、`urls`，不能翻译成中文。中文只会作为分组名、频道名、线路名这些值出现。
+
+`/playlist.json` 和 `/live.txt` 每个频道只出现一次，`urls` 或直播地址里会用 `#` 拼接多条线路，并用 `$[源名]` 标注线路名。
 
 格式示例：
 
 ```json
-[
-  {
-    "name": "CCTV4K",
-    "urls": [
-      "$[源1]http://你的VPS-IP:3080/play/cctv4k?source=0#$[源2]http://你的VPS-IP:3080/play/cctv4k?source=1"
-    ]
-  }
-]
+{
+  "lives": [
+    {
+      "group": "IPTV",
+      "channels": [
+        {
+          "name": "CCTV4K",
+          "urls": [
+            "$[源1]http://你的VPS-IP:3080/play/cctv4k?source=0#$[源2]http://你的VPS-IP:3080/play/cctv4k?source=1"
+          ]
+        }
+      ]
+    }
+  ]
+}
 ```
 
 ## 常用命令
@@ -123,6 +151,10 @@ docker compose up -d --build
 - `GET /playlist.m3u`：去重后的播放列表。
 - `GET /playlist-sources.m3u`：同频道多信号源播放列表。
 - `GET /playlist.json`：影视仓风格 JSON 多源播放列表。
+- `GET /live.txt`：TVBox/影视仓直播 TXT 源。
+- `GET /tvbox.json`：TVBox/影视仓完整配置，直播入口指向 `/live.txt`。
+- `GET /tvbox-direct.json`：TVBox/影视仓完整配置，直接内嵌频道列表。
+- `GET /warehouse.json`：影视仓仓库配置，指向 `/tvbox.json`。
 - `GET /api/sources`：当前采集源。
 - `PUT /api/sources`：保存采集源并刷新。
 - `GET /api/channels`：频道和线路 JSON。

@@ -23,6 +23,14 @@ function escapeAttribute(value = "") {
   return String(value).replaceAll('"', "&quot;");
 }
 
+function escapeLiveValue(value = "") {
+  return String(value).replaceAll("\r", " ").replaceAll("\n", " ").trim();
+}
+
+function formatLiveSourceLabel(value, fallback) {
+  return escapeLiveValue(value || fallback).replaceAll("]", "").replaceAll("#", "");
+}
+
 export function parseM3u(text, sourceName) {
   const lines = String(text || "").split(/\r?\n/);
   const entries = [];
@@ -112,6 +120,35 @@ export function generateSourcePlaylist(channels, baseUrl) {
       lines.push(`#EXTINF:-1 ${attrs.join(" ")},${channel.name}`);
       lines.push(`${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${sourceIndex}`);
     }
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+export function generateLiveTxt(channels, baseUrl) {
+  const cleanBaseUrl = String(baseUrl || "").replace(/\/$/, "");
+  const groups = new Map();
+
+  for (const channel of channels) {
+    const groupName = escapeLiveValue(channel.group || "IPTV");
+    if (!groups.has(groupName)) {
+      groups.set(groupName, []);
+    }
+
+    const sources = channel.sources?.length ? channel.sources : [{}];
+    const joinedUrls = sources
+      .map((source, index) => {
+        const label = formatLiveSourceLabel(source.sourceName, `Line ${index + 1}`);
+        return `$[${label}]${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${index}`;
+      })
+      .join("#");
+
+    groups.get(groupName).push(`${escapeLiveValue(channel.name)},${joinedUrls}`);
+  }
+
+  const lines = [];
+  for (const [groupName, channelLines] of groups.entries()) {
+    lines.push(`${groupName},#genre#`, ...channelLines);
   }
 
   return `${lines.join("\n")}\n`;

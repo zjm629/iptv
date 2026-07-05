@@ -1,12 +1,35 @@
 import express from "express";
 import cron from "node-cron";
 import { fileURLToPath } from "node:url";
-import { generatePlaylist, generateSourcePlaylist } from "./m3u.js";
+import { generateLiveTxt, generatePlaylist, generateSourcePlaylist } from "./m3u.js";
 import { createStore } from "./store.js";
 import { renderHomePage } from "./web.js";
 
 function getBaseUrl(req) {
   return `${req.protocol}://${req.get("host")}`;
+}
+
+function ensureChannelsAvailable(res, channels, type = "json") {
+  if (channels.length > 0) {
+    return true;
+  }
+
+  if (type === "json") {
+    res.status(503).json({ error: "No playlist cache is available yet." });
+    return false;
+  }
+
+  res.status(503).type("text").send("No playlist cache is available yet.");
+  return false;
+}
+
+function formatJsonSourceLabel(value, fallback) {
+  return String(value || fallback)
+    .replaceAll("]", "")
+    .replaceAll("#", "")
+    .replaceAll("\r", " ")
+    .replaceAll("\n", " ")
+    .trim();
 }
 
 function generateJsonPlaylist(channels, baseUrl) {
@@ -22,7 +45,7 @@ function generateJsonPlaylist(channels, baseUrl) {
     const sources = channel.sources?.length ? channel.sources : [{}];
     const joinedUrls = sources
       .map((source, index) => {
-        const label = String(source.sourceName || `线路${index + 1}`).replaceAll("]", "");
+        const label = formatJsonSourceLabel(source.sourceName, `Line ${index + 1}`);
         return `$[${label}]${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${index}`;
       })
       .join("#");
@@ -38,6 +61,49 @@ function generateJsonPlaylist(channels, baseUrl) {
       group,
       channels: groupedChannels
     }))
+  };
+}
+
+function generateTvboxProxyConfig(baseUrl) {
+  const cleanBaseUrl = String(baseUrl || "").replace(/\/$/, "");
+
+  return {
+    sites: [],
+    lives: [
+      {
+        group: "redirect",
+        channels: [
+          {
+            name: "IPTV",
+            urls: [`proxy://do=live&type=txt&ext=${cleanBaseUrl}/live.txt`]
+          }
+        ]
+      }
+    ],
+    parses: [],
+    flags: []
+  };
+}
+
+function generateTvboxDirectConfig(channels, baseUrl) {
+  return {
+    sites: [],
+    ...generateJsonPlaylist(channels, baseUrl),
+    parses: [],
+    flags: []
+  };
+}
+
+function generateWarehouseConfig(baseUrl) {
+  const cleanBaseUrl = String(baseUrl || "").replace(/\/$/, "");
+
+  return {
+    urls: [
+      {
+        name: "IPTV直播",
+        url: `${cleanBaseUrl}/tvbox.json`
+      }
+    ]
   };
 }
 
@@ -87,8 +153,7 @@ export function createApp(store) {
 
   app.get("/playlist.m3u", (req, res) => {
     const channels = store.getChannels();
-    if (channels.length === 0) {
-      res.status(503).type("text").send("No playlist cache is available yet.");
+    if (!ensureChannelsAvailable(res, channels, "text")) {
       return;
     }
 
@@ -99,8 +164,7 @@ export function createApp(store) {
 
   app.get("/playlist-sources.m3u", (req, res) => {
     const channels = store.getChannels();
-    if (channels.length === 0) {
-      res.status(503).type("text").send("No playlist cache is available yet.");
+    if (!ensureChannelsAvailable(res, channels, "text")) {
       return;
     }
 
@@ -111,14 +175,57 @@ export function createApp(store) {
 
   app.get("/playlist.json", (req, res) => {
     const channels = store.getChannels();
-    if (channels.length === 0) {
-      res.status(503).json({ error: "No playlist cache is available yet." });
+    if (!ensureChannelsAvailable(res, channels)) {
       return;
     }
 
     res
       .type("application/json")
       .send(`${JSON.stringify(generateJsonPlaylist(channels, getBaseUrl(req)), null, 2)}\n`);
+  });
+
+  app.get("/live.txt", (req, res) => {
+    const channels = store.getChannels();
+    if (!ensureChannelsAvailable(res, channels, "text")) {
+      return;
+    }
+
+    res
+      .type("text/plain")
+      .send(generateLiveTxt(channels, getBaseUrl(req)));
+  });
+
+  app.get("/tvbox.json", (req, res) => {
+    const channels = store.getChannels();
+    if (!ensureChannelsAvailable(res, channels)) {
+      return;
+    }
+
+    res
+      .type("application/json")
+      .send(`${JSON.stringify(generateTvboxProxyConfig(getBaseUrl(req)), null, 2)}\n`);
+  });
+
+  app.get("/tvbox-direct.json", (req, res) => {
+    const channels = store.getChannels();
+    if (!ensureChannelsAvailable(res, channels)) {
+      return;
+    }
+
+    res
+      .type("application/json")
+      .send(`${JSON.stringify(generateTvboxDirectConfig(channels, getBaseUrl(req)), null, 2)}\n`);
+  });
+
+  app.get("/warehouse.json", (req, res) => {
+    const channels = store.getChannels();
+    if (!ensureChannelsAvailable(res, channels)) {
+      return;
+    }
+
+    res
+      .type("application/json")
+      .send(`${JSON.stringify(generateWarehouseConfig(getBaseUrl(req)), null, 2)}\n`);
   });
 
   app.get("/play/:channelId", (req, res) => {
