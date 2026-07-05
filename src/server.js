@@ -1,7 +1,7 @@
 import express from "express";
 import cron from "node-cron";
 import { fileURLToPath } from "node:url";
-import { generatePlaylist } from "./m3u.js";
+import { generatePlaylist, generateSourcePlaylist } from "./m3u.js";
 import { createStore } from "./store.js";
 import { renderHomePage } from "./web.js";
 
@@ -63,6 +63,18 @@ export function createApp(store) {
     res
       .type("application/x-mpegURL")
       .send(generatePlaylist(channels, getBaseUrl(req)));
+  });
+
+  app.get("/playlist-sources.m3u", (req, res) => {
+    const channels = store.getChannels();
+    if (channels.length === 0) {
+      res.status(503).type("text").send("No playlist cache is available yet.");
+      return;
+    }
+
+    res
+      .type("application/x-mpegURL")
+      .send(generateSourcePlaylist(channels, getBaseUrl(req)));
   });
 
   app.get("/play/:channelId", (req, res) => {

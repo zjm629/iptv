@@ -1,4 +1,4 @@
-import { generatePlaylist, parseM3u } from "../src/m3u.js";
+import { generatePlaylist, generateSourcePlaylist, parseM3u } from "../src/m3u.js";
 
 describe("m3u parsing", () => {
   test("parses extinf entries with attributes and stream urls", () => {
@@ -57,5 +57,27 @@ describe("m3u generation", () => {
     expect(playlist).toContain('group-title="央视",CCTV-1 综合');
     expect(playlist).toContain("http://vps.example:3080/play/cctv1");
     expect(playlist).toContain("http://vps.example:3080/play/hunanweishi");
+  });
+
+  test("generates repeated channel entries for player source selection", () => {
+    const channels = [
+      {
+        id: "cctv1",
+        name: "CCTV-1 综合",
+        logo: "https://logo.example/cctv1.png",
+        group: "央视",
+        sources: [
+          { url: "http://a.example/cctv1.m3u8" },
+          { url: "http://b.example/cctv1.m3u8" }
+        ]
+      }
+    ];
+
+    const playlist = generateSourcePlaylist(channels, "http://vps.example:3080");
+
+    expect(playlist.match(/,CCTV-1 综合/g)).toHaveLength(2);
+    expect(playlist.match(/tvg-id="cctv1"/g)).toHaveLength(2);
+    expect(playlist).toContain("http://vps.example:3080/play/cctv1?source=0");
+    expect(playlist).toContain("http://vps.example:3080/play/cctv1?source=1");
   });
 });

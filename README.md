@@ -12,6 +12,7 @@
 - 多个 M3U 源统一归并，同名频道只显示一个。
 - 同一频道保留多条线路，可在网页里自由选择。
 - 提供去重后的播放列表地址 `/playlist.m3u`。
+- 提供电视 APP 多信号源播放列表地址 `/playlist-sources.m3u`。
 
 ## 部署到 VPS
 
@@ -53,6 +54,14 @@ IPTV 播放器里填写你的输出地址：
 http://你的VPS-IP:3080/playlist.m3u
 ```
 
+如果你的电视 APP 支持“信号源”菜单，建议填写多信号源地址：
+
+```text
+http://你的VPS-IP:3080/playlist-sources.m3u
+```
+
+这个地址会把同一个频道的多条线路输出为同名、同 `tvg-id` 的多条记录，方便播放器识别为同频道的多个信号源。
+
 ## 常用命令
 
 进入项目目录：
@@ -90,6 +99,7 @@ docker compose up -d --build
 
 - `GET /`：Web 管理页。
 - `GET /playlist.m3u`：去重后的播放列表。
+- `GET /playlist-sources.m3u`：同频道多信号源播放列表。
 - `GET /api/sources`：当前采集源。
 - `PUT /api/sources`：保存采集源并刷新。
 - `GET /api/channels`：频道和线路 JSON。

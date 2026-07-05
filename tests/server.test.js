@@ -52,6 +52,18 @@ describe("server routes", () => {
     expect(response.text).toContain("http://vps.example:3080/play/cctv1");
   });
 
+  test("returns generated source-selection playlist", async () => {
+    const response = await request(createApp(createFakeStore()))
+      .get("/playlist-sources.m3u")
+      .set("Host", "vps.example:3080");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/x-mpegurl");
+    expect(response.text.match(/,CCTV-1/g)).toHaveLength(2);
+    expect(response.text).toContain("http://vps.example:3080/play/cctv1?source=0");
+    expect(response.text).toContain("http://vps.example:3080/play/cctv1?source=1");
+  });
+
   test("redirects channel playback to requested source line", async () => {
     const response = await request(createApp(createFakeStore())).get("/play/cctv1?source=1");
 
@@ -105,5 +117,6 @@ describe("server routes", () => {
     expect(response.headers["content-type"]).toContain("text/html");
     expect(response.text).toContain("IPTV M3U Manager");
     expect(response.text).toContain("source-editor");
+    expect(response.text).toContain("playlist-sources.m3u");
   });
 });

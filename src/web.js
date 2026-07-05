@@ -48,7 +48,7 @@ export function renderHomePage() {
     }
     .toolbar {
       display: grid;
-      grid-template-columns: 1fr auto auto;
+      grid-template-columns: 1fr auto auto auto;
       gap: 10px;
     }
     input, button {
@@ -153,6 +153,7 @@ export function renderHomePage() {
       <input id="search" type="search" placeholder="搜索频道">
       <button id="copy">复制播放列表地址</button>
       <a id="playlist" href="/playlist.m3u">playlist.m3u</a>
+      <a id="playlist-sources" href="/playlist-sources.m3u">playlist-sources.m3u</a>
     </section>
     <section class="status" id="status"></section>
     <section class="channels" id="channels"></section>

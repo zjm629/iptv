@@ -88,3 +88,31 @@ export function generatePlaylist(channels, baseUrl) {
 
   return `${lines.join("\n")}\n`;
 }
+
+export function generateSourcePlaylist(channels, baseUrl) {
+  const cleanBaseUrl = String(baseUrl || "").replace(/\/$/, "");
+  const lines = ["#EXTM3U"];
+
+  for (const channel of channels) {
+    const sources = channel.sources?.length ? channel.sources : [{}];
+    for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
+      const attrs = [
+        `tvg-id="${escapeAttribute(channel.id)}"`,
+        `tvg-name="${escapeAttribute(channel.name)}"`
+      ];
+
+      if (channel.logo) {
+        attrs.push(`tvg-logo="${escapeAttribute(channel.logo)}"`);
+      }
+
+      if (channel.group) {
+        attrs.push(`group-title="${escapeAttribute(channel.group)}"`);
+      }
+
+      lines.push(`#EXTINF:-1 ${attrs.join(" ")},${channel.name}`);
+      lines.push(`${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${sourceIndex}`);
+    }
+  }
+
+  return `${lines.join("\n")}\n`;
+}
