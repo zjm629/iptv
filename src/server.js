@@ -12,27 +12,20 @@ function getBaseUrl(req) {
 function generateJsonPlaylist(channels, baseUrl) {
   const cleanBaseUrl = String(baseUrl || "").replace(/\/$/, "");
 
-  return {
-    name: "IPTV M3U Manager",
-    channels: channels.map((channel) => {
-      const sources = channel.sources || [];
-      const urls = sources.map((_source, index) => `${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${index}`);
+  return channels.map((channel) => {
+    const sources = channel.sources?.length ? channel.sources : [{}];
+    const joinedUrls = sources
+      .map((source, index) => {
+        const label = String(source.sourceName || `线路${index + 1}`).replaceAll("]", "");
+        return `$[${label}]${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${index}`;
+      })
+      .join("#");
 
-      return {
-        id: channel.id,
-        tvgId: channel.id,
-        name: channel.name,
-        logo: channel.logo || "",
-        group: channel.group || "",
-        urls,
-        sources: sources.map((source, index) => ({
-          name: source.sourceName || `Source ${index + 1}`,
-          url: urls[index],
-          originalUrl: source.url
-        }))
-      };
-    })
-  };
+    return {
+      name: channel.name,
+      urls: [joinedUrls]
+    };
+  });
 }
 
 export function createApp(store) {

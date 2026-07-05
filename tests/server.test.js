@@ -64,35 +64,18 @@ describe("server routes", () => {
     expect(response.text).toContain("http://vps.example:3080/play/cctv1?source=1");
   });
 
-  test("returns json playlist with nested urls per channel", async () => {
+  test("returns yingshicang-style json playlist with tagged joined urls", async () => {
     const response = await request(createApp(createFakeStore()))
       .get("/playlist.json")
       .set("Host", "vps.example:3080");
 
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("application/json");
-    expect(response.body.channels).toEqual([
+    expect(response.body).toEqual([
       {
-        id: "cctv1",
-        tvgId: "cctv1",
         name: "CCTV-1 综合",
-        logo: "https://logo.example/cctv.png",
-        group: "央视",
         urls: [
-          "http://vps.example:3080/play/cctv1?source=0",
-          "http://vps.example:3080/play/cctv1?source=1"
-        ],
-        sources: [
-          {
-            name: "A",
-            url: "http://vps.example:3080/play/cctv1?source=0",
-            originalUrl: "http://a.example/cctv1.m3u8"
-          },
-          {
-            name: "B",
-            url: "http://vps.example:3080/play/cctv1?source=1",
-            originalUrl: "http://b.example/cctv1.m3u8"
-          }
+          "$[A]http://vps.example:3080/play/cctv1?source=0#$[B]http://vps.example:3080/play/cctv1?source=1"
         ]
       }
     ]);
