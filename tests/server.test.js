@@ -1,0 +1,76 @@
+import request from "supertest";
+import { jest } from "@jest/globals";
+import { createApp } from "../src/server.js";
+
+function createFakeStore() {
+  const channels = [
+    {
+      id: "cctv1",
+      name: "CCTV-1 综合",
+      logo: "https://logo.example/cctv.png",
+      group: "央视",
+      sources: [
+        { sourceName: "A", url: "http://a.example/cctv1.m3u8" },
+        { sourceName: "B", url: "http://b.example/cctv1.m3u8" }
+      ]
+    }
+  ];
+
+  return {
+    refresh: jest.fn(async () => ({ ok: true })),
+    getChannels: () => channels,
+    getChannel: (id) => channels.find((channel) => channel.id === id) || null,
+    getStatus: () => ({
+      lastRefreshAt: "2026-07-05T00:00:00.000Z",
+      lastSuccessAt: "2026-07-05T00:00:00.000Z",
+      refreshing: false,
+      channelCount: channels.length,
+      sourceCount: 1,
+      sources: [{ name: "A", url: "http://a.example/list.m3u", ok: true, channels: 1 }]
+    })
+  };
+}
+
+describe("server routes", () => {
+  test("returns merged channels as json", async () => {
+    const response = await request(createApp(createFakeStore())).get("/api/channels");
+
+    expect(response.status).toBe(200);
+    expect(response.body[0].id).toBe("cctv1");
+    expect(response.body[0].sources).toHaveLength(2);
+  });
+
+  test("returns generated playlist", async () => {
+    const response = await request(createApp(createFakeStore()))
+      .get("/playlist.m3u")
+      .set("Host", "vps.example:3080");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/x-mpegurl");
+    expect(response.text).toContain("http://vps.example:3080/play/cctv1");
+  });
+
+  test("redirects channel playback to requested source line", async () => {
+    const response = await request(createApp(createFakeStore())).get("/play/cctv1?source=1");
+
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe("http://b.example/cctv1.m3u8");
+  });
+
+  test("triggers manual refresh", async () => {
+    const store = createFakeStore();
+    const response = await request(createApp(store)).post("/api/refresh");
+
+    expect(response.status).toBe(200);
+    expect(store.refresh).toHaveBeenCalledTimes(1);
+    expect(response.body.channelCount).toBe(1);
+  });
+
+  test("returns web management page", async () => {
+    const response = await request(createApp(createFakeStore())).get("/");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/html");
+    expect(response.text).toContain("IPTV M3U Manager");
+  });
+});

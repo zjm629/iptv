@@ -1,0 +1,15 @@
+services:
+  iptv-manager:
+    build: .
+    container_name: iptv-manager
+    restart: unless-stopped
+    ports:
+      - "3080:3080"
+    environment:
+      PORT: "3080"
+      SOURCES_PATH: "/app/config/sources.json"
+      CACHE_PATH: "/app/data/cache.json"
+      REFRESH_CRON: "0 */2 * * *"
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
