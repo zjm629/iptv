@@ -101,6 +101,43 @@ http://b.example/cctv1.m3u8
     ]);
   });
 
+  test("preserves first-seen channel order across sources", async () => {
+    const { configPath, cachePath } = await createTempConfig([
+      { name: "Source A", url: "http://source-a.example/list.m3u" },
+      { name: "Source B", url: "http://source-b.example/list.m3u" }
+    ]);
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => `#EXTM3U
+#EXTINF:-1,湖南卫视
+http://a.example/hunan.m3u8
+#EXTINF:-1,CCTV-1 综合
+http://a.example/cctv1.m3u8
+`
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => `#EXTM3U
+#EXTINF:-1,CCTV1
+http://b.example/cctv1.m3u8
+#EXTINF:-1,北京卫视
+http://b.example/beijing.m3u8
+`
+      });
+
+    const store = createStore({ configPath, cachePath, fetchImpl: fetchMock });
+    await store.refresh();
+
+    expect(store.getChannels().map((channel) => channel.name)).toEqual([
+      "湖南卫视",
+      "CCTV-1 综合",
+      "北京卫视"
+    ]);
+    expect(store.getChannel("cctv1").sources).toHaveLength(2);
+  });
+
   test("keeps last successful cache when later refresh fails", async () => {
     const { configPath, cachePath } = await createTempConfig([
       { name: "Source A", url: "http://source-a.example/list.m3u" }

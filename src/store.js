@@ -89,7 +89,7 @@ function mergeEntries(entries) {
     }
   }
 
-  return Array.from(byKey.values()).sort((a, b) => a.name.localeCompare(b.name, "zh-Hans-CN"));
+  return Array.from(byKey.values());
 }
 
 export function createStore(options = {}) {
