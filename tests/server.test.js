@@ -71,6 +71,7 @@ describe("server routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("application/json");
+    expect(response.text).toContain('[\n  {\n    "name"');
     expect(response.body).toEqual([
       {
         name: "CCTV-1 综合",

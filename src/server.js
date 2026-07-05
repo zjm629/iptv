@@ -103,7 +103,9 @@ export function createApp(store) {
       return;
     }
 
-    res.json(generateJsonPlaylist(channels, getBaseUrl(req)));
+    res
+      .type("application/json")
+      .send(`${JSON.stringify(generateJsonPlaylist(channels, getBaseUrl(req)), null, 2)}\n`);
   });
 
   app.get("/play/:channelId", (req, res) => {

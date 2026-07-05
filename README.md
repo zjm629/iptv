@@ -71,6 +71,19 @@ http://你的VPS-IP:3080/playlist.json
 
 这个地址每个频道只出现一次，`urls` 里会用 `#` 拼接多条线路，并用 `$[源名]` 标注线路名。
 
+格式示例：
+
+```json
+[
+  {
+    "name": "CCTV4K",
+    "urls": [
+      "$[源1]http://你的VPS-IP:3080/play/cctv4k?source=0#$[源2]http://你的VPS-IP:3080/play/cctv4k?source=1"
+    ]
+  }
+]
+```
+
 ## 常用命令
 
 进入项目目录：
