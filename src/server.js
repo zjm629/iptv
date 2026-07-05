@@ -9,6 +9,32 @@ function getBaseUrl(req) {
   return `${req.protocol}://${req.get("host")}`;
 }
 
+function generateJsonPlaylist(channels, baseUrl) {
+  const cleanBaseUrl = String(baseUrl || "").replace(/\/$/, "");
+
+  return {
+    name: "IPTV M3U Manager",
+    channels: channels.map((channel) => {
+      const sources = channel.sources || [];
+      const urls = sources.map((_source, index) => `${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${index}`);
+
+      return {
+        id: channel.id,
+        tvgId: channel.id,
+        name: channel.name,
+        logo: channel.logo || "",
+        group: channel.group || "",
+        urls,
+        sources: sources.map((source, index) => ({
+          name: source.sourceName || `Source ${index + 1}`,
+          url: urls[index],
+          originalUrl: source.url
+        }))
+      };
+    })
+  };
+}
+
 export function createApp(store) {
   const app = express();
   app.set("trust proxy", true);
@@ -75,6 +101,16 @@ export function createApp(store) {
     res
       .type("application/x-mpegURL")
       .send(generateSourcePlaylist(channels, getBaseUrl(req)));
+  });
+
+  app.get("/playlist.json", (req, res) => {
+    const channels = store.getChannels();
+    if (channels.length === 0) {
+      res.status(503).json({ error: "No playlist cache is available yet." });
+      return;
+    }
+
+    res.json(generateJsonPlaylist(channels, getBaseUrl(req)));
   });
 
   app.get("/play/:channelId", (req, res) => {
