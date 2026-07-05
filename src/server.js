@@ -11,8 +11,14 @@ function getBaseUrl(req) {
 
 function generateJsonPlaylist(channels, baseUrl) {
   const cleanBaseUrl = String(baseUrl || "").replace(/\/$/, "");
+  const groups = new Map();
 
-  return channels.map((channel) => {
+  for (const channel of channels) {
+    const groupName = channel.group || "IPTV";
+    if (!groups.has(groupName)) {
+      groups.set(groupName, []);
+    }
+
     const sources = channel.sources?.length ? channel.sources : [{}];
     const joinedUrls = sources
       .map((source, index) => {
@@ -21,11 +27,18 @@ function generateJsonPlaylist(channels, baseUrl) {
       })
       .join("#");
 
-    return {
+    groups.get(groupName).push({
       name: channel.name,
       urls: [joinedUrls]
-    };
-  });
+    });
+  }
+
+  return {
+    lives: Array.from(groups.entries()).map(([group, groupedChannels]) => ({
+      group,
+      channels: groupedChannels
+    }))
+  };
 }
 
 export function createApp(store) {

@@ -6,9 +6,9 @@ function createFakeStore() {
   const channels = [
     {
       id: "cctv1",
-      name: "CCTV-1 综合",
+      name: "CCTV-1",
       logo: "https://logo.example/cctv.png",
-      group: "央视",
+      group: "CCTV",
       sources: [
         { sourceName: "A", url: "http://a.example/cctv1.m3u8" },
         { sourceName: "B", url: "http://b.example/cctv1.m3u8" }
@@ -64,22 +64,29 @@ describe("server routes", () => {
     expect(response.text).toContain("http://vps.example:3080/play/cctv1?source=1");
   });
 
-  test("returns yingshicang-style json playlist with tagged joined urls", async () => {
+  test("returns yingshicang-style json playlist grouped under lives", async () => {
     const response = await request(createApp(createFakeStore()))
       .get("/playlist.json")
       .set("Host", "vps.example:3080");
 
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("application/json");
-    expect(response.text).toContain('[\n  {\n    "name"');
-    expect(response.body).toEqual([
-      {
-        name: "CCTV-1 综合",
-        urls: [
-          "$[A]http://vps.example:3080/play/cctv1?source=0#$[B]http://vps.example:3080/play/cctv1?source=1"
-        ]
-      }
-    ]);
+    expect(response.text).toContain('{\n  "lives"');
+    expect(response.body).toEqual({
+      lives: [
+        {
+          group: "CCTV",
+          channels: [
+            {
+              name: "CCTV-1",
+              urls: [
+                "$[A]http://vps.example:3080/play/cctv1?source=0#$[B]http://vps.example:3080/play/cctv1?source=1"
+              ]
+            }
+          ]
+        }
+      ]
+    });
   });
 
   test("redirects channel playback to requested source line", async () => {
