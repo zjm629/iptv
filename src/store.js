@@ -300,9 +300,14 @@ export function createStore(options = {}) {
         throw new Error("Channel not found");
       }
 
+      if (direction === "top" && index > 0) {
+        currentOrder.splice(index, 1);
+        currentOrder.unshift(channelId);
+      }
+
       const delta = direction === "up" ? -1 : direction === "down" ? 1 : 0;
       const nextIndex = index + delta;
-      if (delta !== 0 && nextIndex >= 0 && nextIndex < currentOrder.length) {
+      if (direction !== "top" && delta !== 0 && nextIndex >= 0 && nextIndex < currentOrder.length) {
         [currentOrder[index], currentOrder[nextIndex]] = [currentOrder[nextIndex], currentOrder[index]];
       }
 

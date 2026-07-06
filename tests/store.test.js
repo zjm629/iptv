@@ -201,7 +201,7 @@ http://b.example/cctv1.m3u8
       disabledSourceUrls: ["http://a.example/cctv1.m3u8"]
     });
     await store.saveChannelOverride("cctv2", { hidden: true });
-    await store.moveChannel("cctv2", "up");
+    await store.moveChannel("cctv2", "top");
 
     expect(store.getChannels()).toEqual([
       expect.objectContaining({

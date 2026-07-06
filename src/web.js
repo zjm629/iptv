@@ -274,6 +274,7 @@ export function renderHomePage() {
         "<span class='channel-title'><strong>" + escapeHtml(channel.name) + "</strong><span class='muted'>" +
         channel.sources.length + " 条线路</span>" + (channel.hidden ? "<span class='badge'>已隐藏</span>" : "") + "</span>" +
         "<span class='channel-actions'>" +
+        "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='top'>置顶</button>" +
         "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='up'>上移</button>" +
         "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='down'>下移</button>" +
         "<button class='" + (channel.hidden ? "secondary" : "danger") + " toggle-channel' data-id='" + escapeHtml(channel.id) + "' data-hidden='" + (!channel.hidden) + "'>" +
