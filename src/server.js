@@ -1,9 +1,18 @@
 import express from "express";
 import cron from "node-cron";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateLiveTxt, generatePlaylist, generateSourcePlaylist } from "./m3u.js";
 import { createStore } from "./store.js";
 import { renderHomePage } from "./web.js";
+
+const TEST_PLAYLIST_FILES = new Set([
+  "test1.m3u",
+  "test2.m3u",
+  "test2.txt",
+  "test3.m3u",
+  "test4.json"
+]);
 
 function getBaseUrl(req) {
   return `${req.protocol}://${req.get("host")}`;
@@ -98,6 +107,16 @@ export function createApp(store) {
     res
       .type("text/plain")
       .send(generateLiveTxt(channels, getBaseUrl(req)));
+  });
+
+  app.get(Array.from(TEST_PLAYLIST_FILES, (fileName) => `/${fileName}`), (req, res) => {
+    const fileName = req.path.slice(1);
+    if (!TEST_PLAYLIST_FILES.has(fileName)) {
+      res.status(404).send("Not found");
+      return;
+    }
+
+    res.sendFile(path.join(process.cwd(), fileName));
   });
 
   app.get("/play/:channelId", (req, res) => {

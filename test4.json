@@ -1,0 +1,12 @@
+{
+  "lives": [
+    {
+      "name": "测试M3U转TXT",
+      "type": 0,
+      "url": "http://c.qiusai5.com:3080/playlist-sources.m3u",
+      "playerType": 1,
+      "epg": "https://epg.112114.xyz/?ch={name}&date={date}",
+      "m3uToTxt": true
+    }
+  ]
+}

@@ -87,6 +87,24 @@ describe("server routes", () => {
     }
   });
 
+  test("serves whitelisted test playlist files", async () => {
+    const app = createApp(createFakeStore());
+    const expected = [
+      ["/test1.m3u", "CCTV1 综合"],
+      ["/test2.m3u", "#genre#"],
+      ["/test2.txt", "#genre#"],
+      ["/test3.m3u", "#EXTM3U"],
+      ["/test4.json", "m3uToTxt"]
+    ];
+
+    for (const [endpoint, marker] of expected) {
+      const response = await request(app).get(endpoint);
+      const content = response.text || Buffer.from(response.body).toString("utf8") || JSON.stringify(response.body);
+      expect(response.status).toBe(200);
+      expect(content).toContain(marker);
+    }
+  });
+
   test("redirects channel playback to requested source line", async () => {
     const response = await request(createApp(createFakeStore())).get("/play/cctv1?source=1");
 
