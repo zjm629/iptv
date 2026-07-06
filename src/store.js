@@ -38,12 +38,17 @@ function createInitialOverrides() {
 }
 
 function normalizeOverride(value = {}) {
+  const parsedSortOrder = value.sortOrder === "" || value.sortOrder === null || value.sortOrder === undefined
+    ? null
+    : Number(value.sortOrder);
+
   return {
     hidden: Boolean(value.hidden),
     preferredSourceUrl: String(value.preferredSourceUrl || "").trim(),
     disabledSourceUrls: Array.isArray(value.disabledSourceUrls)
       ? Array.from(new Set(value.disabledSourceUrls.map((url) => String(url || "").trim()).filter(Boolean)))
-      : []
+      : [],
+    sortOrder: Number.isFinite(parsedSortOrder) ? parsedSortOrder : null
   };
 }
 
@@ -142,6 +147,32 @@ function applyChannelOrder(sourceChannels, order) {
   return ordered;
 }
 
+function applySortOrders(sourceChannels) {
+  return sourceChannels
+    .map((channel, index) => ({ channel, index }))
+    .sort((left, right) => {
+      if (left.channel.hidden !== right.channel.hidden) {
+        return left.channel.hidden ? 1 : -1;
+      }
+
+      if (left.channel.hidden && right.channel.hidden) {
+        return left.index - right.index;
+      }
+
+      const leftHasSort = Number.isFinite(left.channel.sortOrder);
+      const rightHasSort = Number.isFinite(right.channel.sortOrder);
+      if (leftHasSort && rightHasSort && left.channel.sortOrder !== right.channel.sortOrder) {
+        return left.channel.sortOrder - right.channel.sortOrder;
+      }
+      if (leftHasSort !== rightHasSort) {
+        return leftHasSort ? -1 : 1;
+      }
+
+      return left.index - right.index;
+    })
+    .map(({ channel }) => channel);
+}
+
 export function createStore(options = {}) {
   const configPath = options.configPath || process.env.SOURCES_PATH || path.join(process.cwd(), "config", "sources.json");
   const cachePath = options.cachePath || process.env.CACHE_PATH || path.join(process.cwd(), "data", "cache.json");
@@ -165,13 +196,14 @@ export function createStore(options = {}) {
     return {
       ...channel,
       hidden: override.hidden,
+      sortOrder: override.sortOrder,
       defaultSourceIndex: decoratedSources.find((source) => source.preferred && !source.disabled)?.sourceIndex ?? 0,
       sources: decoratedSources
     };
   }
 
   function getDecoratedChannels() {
-    return applyChannelOrder(channels.map(decorateChannel), overrides.order);
+    return applySortOrders(applyChannelOrder(channels.map(decorateChannel), overrides.order));
   }
 
   async function loadOverrides() {

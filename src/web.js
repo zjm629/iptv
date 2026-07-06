@@ -125,6 +125,18 @@ export function renderHomePage() {
       align-items: baseline;
       flex-wrap: wrap;
     }
+    .sort-control {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .sort-order {
+      width: 76px;
+      min-height: 32px;
+      padding: 0 8px;
+    }
     .lines {
       margin-top: 12px;
       display: grid;
@@ -274,6 +286,8 @@ export function renderHomePage() {
         "<span class='channel-title'><strong>" + escapeHtml(channel.name) + "</strong><span class='muted'>" +
         channel.sources.length + " 条线路</span>" + (channel.hidden ? "<span class='badge'>已隐藏</span>" : "") + "</span>" +
         "<span class='channel-actions'>" +
+        "<label class='sort-control'>序号<input class='sort-order' type='number' min='1' step='1' placeholder='留空' data-id='" + escapeHtml(channel.id) + "' value='" +
+        (Number.isFinite(channel.sortOrder) ? escapeHtml(channel.sortOrder) : "") + "'></label>" +
         "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='top'>置顶</button>" +
         "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='up'>上移</button>" +
         "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='down'>下移</button>" +
@@ -297,6 +311,23 @@ export function renderHomePage() {
           event.preventDefault();
           await postJson("/api/channels/" + encodeURIComponent(button.dataset.id) + "/override", {
             hidden: button.dataset.hidden === "true"
+          });
+        });
+      });
+      document.querySelectorAll(".sort-order").forEach((input) => {
+        input.addEventListener("click", (event) => event.stopPropagation());
+        input.addEventListener("keydown", async (event) => {
+          event.stopPropagation();
+          if (event.key === "Enter") {
+            event.preventDefault();
+            input.blur();
+          }
+        });
+        input.addEventListener("change", async (event) => {
+          event.preventDefault();
+          const value = input.value.trim();
+          await postJson("/api/channels/" + encodeURIComponent(input.dataset.id) + "/override", {
+            sortOrder: value === "" ? null : Number(value)
           });
         });
       });

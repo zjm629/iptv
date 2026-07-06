@@ -199,6 +199,8 @@ describe("server routes", () => {
     expect(response.text).toContain("playlist-sources.m3u");
     expect(response.text).toContain("live.txt");
     expect(response.text).toContain("live.m3u");
+    expect(response.text).toContain("sort-order");
+    expect(response.text).toContain("序号");
     expect(response.text).toContain("设为默认");
     expect(response.text).toContain("置顶");
     expect(response.text).toContain("上移");
