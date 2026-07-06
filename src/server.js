@@ -23,97 +23,6 @@ function ensureChannelsAvailable(res, channels, type = "json") {
   return false;
 }
 
-function formatJsonSourceLabel(value, fallback) {
-  return String(value || fallback)
-    .replaceAll("]", "")
-    .replaceAll("#", "")
-    .replaceAll("\r", " ")
-    .replaceAll("\n", " ")
-    .trim();
-}
-
-function generateJsonPlaylist(channels, baseUrl) {
-  const cleanBaseUrl = String(baseUrl || "").replace(/\/$/, "");
-  const groups = new Map();
-
-  for (const channel of channels) {
-    const groupName = channel.group || "IPTV";
-    if (!groups.has(groupName)) {
-      groups.set(groupName, []);
-    }
-
-    const sources = channel.sources?.length ? channel.sources : [{}];
-    const joinedUrls = sources
-      .map((source, index) => {
-        const label = formatJsonSourceLabel(source.sourceName, `Line ${index + 1}`);
-        return `$[${label}]${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${index}`;
-      })
-      .join("#");
-
-    groups.get(groupName).push({
-      name: channel.name,
-      urls: [joinedUrls]
-    });
-  }
-
-  return {
-    lives: Array.from(groups.entries()).map(([group, groupedChannels]) => ({
-      group,
-      channels: groupedChannels
-    }))
-  };
-}
-
-function generateTvboxProxyConfig(baseUrl) {
-  const cleanBaseUrl = String(baseUrl || "").replace(/\/$/, "");
-
-  return {
-    sites: [],
-    lives: [
-      {
-        group: "redirect",
-        channels: [
-          {
-            name: "IPTV",
-            urls: [`proxy://do=live&type=txt&ext=${cleanBaseUrl}/live.txt`]
-          }
-        ]
-      }
-    ],
-    parses: [],
-    flags: []
-  };
-}
-
-function generateTvboxLiveSourceConfig(baseUrl) {
-  const cleanBaseUrl = String(baseUrl || "").replace(/\/$/, "");
-  const epg = "https://epg.112114.xyz/?ch={name}&date={date}";
-
-  return {
-    lives: [
-      {
-        name: "IPTV-TXT",
-        url: `${cleanBaseUrl}/live.txt`,
-        epg
-      },
-      {
-        name: "IPTV-M3U",
-        url: `${cleanBaseUrl}/playlist.m3u`,
-        epg
-      }
-    ]
-  };
-}
-
-function generateTvboxDirectConfig(channels, baseUrl) {
-  return {
-    sites: [],
-    ...generateJsonPlaylist(channels, baseUrl),
-    parses: [],
-    flags: []
-  };
-}
-
 export function createApp(store) {
   const app = express();
   app.set("trust proxy", true);
@@ -180,17 +89,6 @@ export function createApp(store) {
       .send(generateSourcePlaylist(channels, getBaseUrl(req)));
   });
 
-  app.get("/playlist.json", (req, res) => {
-    const channels = store.getChannels();
-    if (!ensureChannelsAvailable(res, channels)) {
-      return;
-    }
-
-    res
-      .type("application/json")
-      .send(`${JSON.stringify(generateJsonPlaylist(channels, getBaseUrl(req)), null, 2)}\n`);
-  });
-
   app.get("/live.txt", (req, res) => {
     const channels = store.getChannels();
     if (!ensureChannelsAvailable(res, channels, "text")) {
@@ -200,50 +98,6 @@ export function createApp(store) {
     res
       .type("text/plain")
       .send(generateLiveTxt(channels, getBaseUrl(req)));
-  });
-
-  app.get("/tvbox.json", (req, res) => {
-    const channels = store.getChannels();
-    if (!ensureChannelsAvailable(res, channels)) {
-      return;
-    }
-
-    res
-      .type("application/json")
-      .send(`${JSON.stringify(generateTvboxLiveSourceConfig(getBaseUrl(req)), null, 2)}\n`);
-  });
-
-  app.get("/tvbox-proxy.json", (req, res) => {
-    const channels = store.getChannels();
-    if (!ensureChannelsAvailable(res, channels)) {
-      return;
-    }
-
-    res
-      .type("application/json")
-      .send(`${JSON.stringify(generateTvboxProxyConfig(getBaseUrl(req)), null, 2)}\n`);
-  });
-
-  app.get("/tvbox-direct.json", (req, res) => {
-    const channels = store.getChannels();
-    if (!ensureChannelsAvailable(res, channels)) {
-      return;
-    }
-
-    res
-      .type("application/json")
-      .send(`${JSON.stringify(generateTvboxDirectConfig(channels, getBaseUrl(req)), null, 2)}\n`);
-  });
-
-  app.get("/warehouse.json", (req, res) => {
-    const channels = store.getChannels();
-    if (!ensureChannelsAvailable(res, channels)) {
-      return;
-    }
-
-    res
-      .type("application/json")
-      .send(`${JSON.stringify(generateTvboxLiveSourceConfig(getBaseUrl(req)), null, 2)}\n`);
   });
 
   app.get("/play/:channelId", (req, res) => {

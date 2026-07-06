@@ -64,31 +64,6 @@ describe("server routes", () => {
     expect(response.text).toContain("http://vps.example:3080/play/cctv1?source=1");
   });
 
-  test("returns yingshicang-style json playlist grouped under lives", async () => {
-    const response = await request(createApp(createFakeStore()))
-      .get("/playlist.json")
-      .set("Host", "vps.example:3080");
-
-    expect(response.status).toBe(200);
-    expect(response.headers["content-type"]).toContain("application/json");
-    expect(response.text).toContain('{\n  "lives"');
-    expect(response.body).toEqual({
-      lives: [
-        {
-          group: "CCTV",
-          channels: [
-            {
-              name: "CCTV-1",
-              urls: [
-                "$[A]http://vps.example:3080/play/cctv1?source=0#$[B]http://vps.example:3080/play/cctv1?source=1"
-              ]
-            }
-          ]
-        }
-      ]
-    });
-  });
-
   test("returns TVBox live txt with grouped channels and merged source links", async () => {
     const response = await request(createApp(createFakeStore()))
       .get("/live.txt")
@@ -102,100 +77,13 @@ describe("server routes", () => {
     );
   });
 
-  test("returns TVBox live-source list matching the reference json shape", async () => {
-    const response = await request(createApp(createFakeStore()))
-      .get("/tvbox.json")
-      .set("Host", "vps.example:3080");
-
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual({
-      lives: [
-        {
-          name: "IPTV-TXT",
-          url: "http://vps.example:3080/live.txt",
-          epg: "https://epg.112114.xyz/?ch={name}&date={date}"
-        },
-        {
-          name: "IPTV-M3U",
-          url: "http://vps.example:3080/playlist.m3u",
-          epg: "https://epg.112114.xyz/?ch={name}&date={date}"
-        }
-      ]
-    });
-  });
-
-  test("keeps the previous proxy TVBox config as a fallback endpoint", async () => {
-    const response = await request(createApp(createFakeStore()))
-      .get("/tvbox-proxy.json")
-      .set("Host", "vps.example:3080");
-
-    expect(response.status).toBe(200);
-    expect(response.body.lives[0].channels[0].urls).toEqual([
-      "proxy://do=live&type=txt&ext=http://vps.example:3080/live.txt"
-    ]);
-  });
-
-  test("returns full TVBox config with direct live channels", async () => {
-    const response = await request(createApp(createFakeStore()))
-      .get("/tvbox-direct.json")
-      .set("Host", "vps.example:3080");
-
-    expect(response.status).toBe(200);
-    expect(response.body.lives[0].group).toBe("CCTV");
-    expect(response.body.lives[0].channels[0].name).toBe("CCTV-1");
-    expect(response.body.lives[0].channels[0].urls).toEqual([
-      "$[A]http://vps.example:3080/play/cctv1?source=0#$[B]http://vps.example:3080/play/cctv1?source=1"
-    ]);
-    expect(response.body.sites).toEqual([]);
-  });
-
-  test("returns warehouse json as the same reference live-source list", async () => {
-    const response = await request(createApp(createFakeStore()))
-      .get("/warehouse.json")
-      .set("Host", "vps.example:3080");
-
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual({
-      lives: [
-        {
-          name: "IPTV-TXT",
-          url: "http://vps.example:3080/live.txt",
-          epg: "https://epg.112114.xyz/?ch={name}&date={date}"
-        },
-        {
-          name: "IPTV-M3U",
-          url: "http://vps.example:3080/playlist.m3u",
-          epg: "https://epg.112114.xyz/?ch={name}&date={date}"
-        }
-      ]
-    });
-  });
-
-  test("TVBox JSON endpoints only use English schema keys", async () => {
+  test("public playlist JSON endpoints are removed", async () => {
     const app = createApp(createFakeStore());
     const endpoints = ["/playlist.json", "/tvbox.json", "/tvbox-proxy.json", "/tvbox-direct.json", "/warehouse.json"];
-    const allowedKeys = new Set(["lives", "group", "channels", "name", "urls", "sites", "parses", "flags", "url", "epg"]);
-    const forbiddenKeys = new Set(["生活", "分组", "频道", "名称", "网址", "链接"]);
-
-    function walk(value) {
-      if (Array.isArray(value)) {
-        value.forEach(walk);
-        return;
-      }
-      if (!value || typeof value !== "object") {
-        return;
-      }
-      for (const key of Object.keys(value)) {
-        expect(forbiddenKeys.has(key)).toBe(false);
-        expect(allowedKeys.has(key)).toBe(true);
-        walk(value[key]);
-      }
-    }
 
     for (const endpoint of endpoints) {
       const response = await request(app).get(endpoint).set("Host", "vps.example:3080");
-      expect(response.status).toBe(200);
-      walk(response.body);
+      expect(response.status).toBe(404);
     }
   });
 
@@ -253,8 +141,9 @@ describe("server routes", () => {
     expect(response.text).toContain("IPTV M3U Manager");
     expect(response.text).toContain("source-editor");
     expect(response.text).toContain("playlist-sources.m3u");
-    expect(response.text).toContain("playlist.json");
-    expect(response.text).toContain("tvbox.json");
-    expect(response.text).toContain("warehouse.json");
+    expect(response.text).toContain("live.txt");
+    expect(response.text).not.toContain("playlist.json");
+    expect(response.text).not.toContain("tvbox.json");
+    expect(response.text).not.toContain("warehouse.json");
   });
 });

@@ -13,8 +13,7 @@
 - 同一频道保留多条线路，可在网页里自由选择。
 - 提供去重后的播放列表地址 `/playlist.m3u`。
 - 提供电视 APP 多信号源播放列表地址 `/playlist-sources.m3u`。
-- 提供影视仓风格 JSON 多源地址 `/playlist.json`。
-- 提供影视仓/TVBox 整仓配置地址 `/warehouse.json` 和 `/tvbox.json`。
+- 提供 TVBox/部分播放器可识别的直播 TXT 地址 `/live.txt`。
 
 ## 部署到 VPS
 
@@ -64,73 +63,10 @@ http://你的VPS-IP:3080/playlist-sources.m3u
 
 这个地址会把同一个频道的多条线路输出为同名、同 `tvg-id` 的多条记录，方便播放器识别为同频道的多个信号源。
 
-如果你的 APP 支持影视仓风格 JSON 频道源，可以尝试：
+如果你的电视 APP 支持 TVBox 直播 TXT 源，可以尝试：
 
 ```text
-http://你的VPS-IP:3080/playlist.json
-```
-
-如果你用的是影视仓，建议优先在“配置/接口/仓库”里填写：
-
-```text
-http://你的VPS-IP:3080/warehouse.json
-```
-
-这个地址采用常见的直播源列表 JSON：
-
-```json
-{
-  "lives": [
-    {
-      "name": "IPTV-TXT",
-      "url": "http://你的VPS-IP:3080/live.txt"
-    },
-    {
-      "name": "IPTV-M3U",
-      "url": "http://你的VPS-IP:3080/playlist.m3u"
-    }
-  ]
-}
-```
-
-如果影视仓要求填写 TVBox 配置地址，也可以填写同样格式的：
-
-```text
-http://你的VPS-IP:3080/tvbox.json
-```
-
-如果这个版本不识别直播源列表格式，再依次尝试下面两个备用格式：
-
-```text
-http://你的VPS-IP:3080/tvbox-proxy.json
-```
-
-```text
-http://你的VPS-IP:3080/tvbox-direct.json
-```
-
-这些 JSON 的结构键名固定为英文，例如 `lives`、`name`、`url`、`group`、`channels`、`urls`，不能翻译成中文。中文只会作为分组名、频道名、线路名这些值出现。
-
-`/playlist.json` 和 `/live.txt` 每个频道只出现一次，`urls` 或直播地址里会用 `#` 拼接多条线路，并用 `$[源名]` 标注线路名。
-
-格式示例：
-
-```json
-{
-  "lives": [
-    {
-      "group": "IPTV",
-      "channels": [
-        {
-          "name": "CCTV4K",
-          "urls": [
-            "$[源1]http://你的VPS-IP:3080/play/cctv4k?source=0#$[源2]http://你的VPS-IP:3080/play/cctv4k?source=1"
-          ]
-        }
-      ]
-    }
-  ]
-}
+http://你的VPS-IP:3080/live.txt
 ```
 
 ## 常用命令
@@ -171,12 +107,7 @@ docker compose up -d --build
 - `GET /`：Web 管理页。
 - `GET /playlist.m3u`：去重后的播放列表。
 - `GET /playlist-sources.m3u`：同频道多信号源播放列表。
-- `GET /playlist.json`：影视仓风格 JSON 多源播放列表。
 - `GET /live.txt`：TVBox/影视仓直播 TXT 源。
-- `GET /tvbox.json`：参考常见生成站格式的直播源列表 JSON。
-- `GET /tvbox-proxy.json`：TVBox/影视仓完整配置，直播入口通过 proxy 指向 `/live.txt`。
-- `GET /tvbox-direct.json`：TVBox/影视仓完整配置，直接内嵌频道列表。
-- `GET /warehouse.json`：与 `/tvbox.json` 相同的直播源列表 JSON。
 - `GET /api/sources`：当前采集源。
 - `PUT /api/sources`：保存采集源并刷新。
 - `GET /api/channels`：频道和线路 JSON。
