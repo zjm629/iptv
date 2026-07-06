@@ -27,6 +27,13 @@ function escapeLiveValue(value = "") {
   return String(value).replaceAll("\r", " ").replaceAll("\n", " ").trim();
 }
 
+function buildPlayUrls(channel, baseUrl) {
+  const sources = channel.sources?.length ? channel.sources : [{}];
+  return sources.map((source, index) =>
+    `${baseUrl}/play/${encodeURIComponent(channel.id)}?source=${source.sourceIndex ?? index}`
+  );
+}
+
 export function parseM3u(text, sourceName) {
   const lines = String(text || "").split(/\r?\n/);
   const entries = [];
@@ -125,25 +132,38 @@ export function generateSourcePlaylist(channels, baseUrl) {
 
 export function generateLiveTxt(channels, baseUrl) {
   const cleanBaseUrl = String(baseUrl || "").replace(/\/$/, "");
-  const groups = new Map();
+  const lines = [];
+  let currentGroup = null;
 
   for (const channel of channels) {
     const groupName = escapeLiveValue(channel.group || "IPTV");
-    if (!groups.has(groupName)) {
-      groups.set(groupName, []);
+    if (groupName !== currentGroup) {
+      lines.push(`${groupName},#genre#`);
+      currentGroup = groupName;
     }
 
-    const sources = channel.sources?.length ? channel.sources : [{}];
-    const joinedUrls = sources
-      .map((source, index) => `${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${source.sourceIndex ?? index}`)
-      .join("#");
-
-    groups.get(groupName).push(`${escapeLiveValue(channel.name)},${joinedUrls}`);
+    const joinedUrls = buildPlayUrls(channel, cleanBaseUrl).join("#");
+    lines.push(`${escapeLiveValue(channel.name)},${joinedUrls}`);
   }
 
-  const lines = [];
-  for (const [groupName, channelLines] of groups.entries()) {
-    lines.push(`${groupName},#genre#`, ...channelLines);
+  return `${lines.join("\n")}\n`;
+}
+
+export function generateLiveM3u(channels, baseUrl) {
+  const cleanBaseUrl = String(baseUrl || "").replace(/\/$/, "");
+  const lines = ['#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"'];
+
+  for (const channel of channels) {
+    const channelName = escapeLiveValue(channel.name);
+    const logo = channel.logo || `https://live.fanmingming.com/tv/${channelName}.png`;
+    const attrs = [
+      `tvg-name="${escapeAttribute(channelName)}"`,
+      `tvg-logo="${escapeAttribute(logo)}"`,
+      `group-title="${escapeAttribute(channel.group || "")}"`
+    ];
+
+    lines.push(`#EXTINF:-1 ${attrs.join(" ")},${channelName}`);
+    lines.push(buildPlayUrls(channel, cleanBaseUrl).join("#"));
   }
 
   return `${lines.join("\n")}\n`;

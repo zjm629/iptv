@@ -16,7 +16,7 @@
 - 网页可设置某个频道的默认线路。
 - 网页可禁用/启用某条线路。
 - 输出 TVBox/影视仓常用的 TXT 单行多源格式 `/live.txt`。
-- 额外输出同内容的 `/live.m3u`，方便电脑端软件测试。
+- 额外输出标准 M3U 格式 `/live.m3u`，方便电脑端软件播放。
 
 ## 部署到 VPS
 
@@ -60,17 +60,25 @@ http://你的VPS-IP:3080
 http://你的VPS-IP:3080/live.txt
 ```
 
-电脑端软件如果更喜欢 `.m3u` 后缀，可以测试：
+电脑端软件如果更喜欢标准 M3U，可以测试：
 
 ```text
 http://你的VPS-IP:3080/live.m3u
 ```
 
-这两个地址内容相同，格式类似：
+`/live.txt` 格式类似：
 
 ```text
 央视频道,#genre#
 CCTV1 综合,http://源1#http://源2#http://源3
+```
+
+`/live.m3u` 格式类似：
+
+```text
+#EXTM3U
+#EXTINF:-1 tvg-name="CCTV1" group-title="央视频道",CCTV1
+http://源1#http://源2#http://源3
 ```
 
 ## 频道管理
@@ -131,7 +139,7 @@ docker compose up -d --build
 
 - `GET /`：Web 管理页。
 - `GET /live.txt`：推荐给电视仓/影视仓的 TXT 单行多源播放源。
-- `GET /live.m3u`：同 `/live.txt`，只是后缀为 `.m3u`。
+- `GET /live.m3u`：推荐给电脑端播放器的标准 M3U 多源播放源。
 - `GET /playlist.m3u`：去重后的标准 M3U 播放列表。
 - `GET /playlist-sources.m3u`：同频道多信号源 M3U 播放列表。
 - `GET /api/sources`：当前采集源。

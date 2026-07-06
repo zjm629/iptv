@@ -2,7 +2,7 @@ import express from "express";
 import cron from "node-cron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { generateLiveTxt, generatePlaylist, generateSourcePlaylist } from "./m3u.js";
+import { generateLiveM3u, generateLiveTxt, generatePlaylist, generateSourcePlaylist } from "./m3u.js";
 import { createStore } from "./store.js";
 import { renderHomePage } from "./web.js";
 
@@ -134,8 +134,8 @@ export function createApp(store) {
     }
 
     res
-      .type("text/plain")
-      .send(generateLiveTxt(channels, getBaseUrl(req)));
+      .type("application/x-mpegURL")
+      .send(generateLiveM3u(channels, getBaseUrl(req)));
   });
 
   app.get(Array.from(TEST_PLAYLIST_FILES, (fileName) => `/${fileName}`), (req, res) => {
