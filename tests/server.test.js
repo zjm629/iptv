@@ -102,30 +102,37 @@ describe("server routes", () => {
     );
   });
 
-  test("returns full TVBox config pointing lives to the live txt proxy", async () => {
+  test("returns TVBox live-source list matching the reference json shape", async () => {
     const response = await request(createApp(createFakeStore()))
       .get("/tvbox.json")
       .set("Host", "vps.example:3080");
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
-      sites: [],
       lives: [
         {
-          group: "redirect",
-          channels: [
-            {
-              name: "IPTV",
-              urls: [
-                "proxy://do=live&type=txt&ext=http://vps.example:3080/live.txt"
-              ]
-            }
-          ]
+          name: "IPTV-TXT",
+          url: "http://vps.example:3080/live.txt",
+          epg: "https://epg.112114.xyz/?ch={name}&date={date}"
+        },
+        {
+          name: "IPTV-M3U",
+          url: "http://vps.example:3080/playlist.m3u",
+          epg: "https://epg.112114.xyz/?ch={name}&date={date}"
         }
-      ],
-      parses: [],
-      flags: []
+      ]
     });
+  });
+
+  test("keeps the previous proxy TVBox config as a fallback endpoint", async () => {
+    const response = await request(createApp(createFakeStore()))
+      .get("/tvbox-proxy.json")
+      .set("Host", "vps.example:3080");
+
+    expect(response.status).toBe(200);
+    expect(response.body.lives[0].channels[0].urls).toEqual([
+      "proxy://do=live&type=txt&ext=http://vps.example:3080/live.txt"
+    ]);
   });
 
   test("returns full TVBox config with direct live channels", async () => {
@@ -142,17 +149,23 @@ describe("server routes", () => {
     expect(response.body.sites).toEqual([]);
   });
 
-  test("returns yingshicang warehouse config without translated field names", async () => {
+  test("returns warehouse json as the same reference live-source list", async () => {
     const response = await request(createApp(createFakeStore()))
       .get("/warehouse.json")
       .set("Host", "vps.example:3080");
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
-      urls: [
+      lives: [
         {
-          name: "IPTV直播",
-          url: "http://vps.example:3080/tvbox.json"
+          name: "IPTV-TXT",
+          url: "http://vps.example:3080/live.txt",
+          epg: "https://epg.112114.xyz/?ch={name}&date={date}"
+        },
+        {
+          name: "IPTV-M3U",
+          url: "http://vps.example:3080/playlist.m3u",
+          epg: "https://epg.112114.xyz/?ch={name}&date={date}"
         }
       ]
     });
@@ -160,8 +173,8 @@ describe("server routes", () => {
 
   test("TVBox JSON endpoints only use English schema keys", async () => {
     const app = createApp(createFakeStore());
-    const endpoints = ["/playlist.json", "/tvbox.json", "/tvbox-direct.json", "/warehouse.json"];
-    const allowedKeys = new Set(["lives", "group", "channels", "name", "urls", "sites", "parses", "flags", "url"]);
+    const endpoints = ["/playlist.json", "/tvbox.json", "/tvbox-proxy.json", "/tvbox-direct.json", "/warehouse.json"];
+    const allowedKeys = new Set(["lives", "group", "channels", "name", "urls", "sites", "parses", "flags", "url", "epg"]);
     const forbiddenKeys = new Set(["生活", "分组", "频道", "名称", "网址", "链接"]);
 
     function walk(value) {

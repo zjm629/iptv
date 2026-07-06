@@ -85,25 +85,32 @@ function generateTvboxProxyConfig(baseUrl) {
   };
 }
 
+function generateTvboxLiveSourceConfig(baseUrl) {
+  const cleanBaseUrl = String(baseUrl || "").replace(/\/$/, "");
+  const epg = "https://epg.112114.xyz/?ch={name}&date={date}";
+
+  return {
+    lives: [
+      {
+        name: "IPTV-TXT",
+        url: `${cleanBaseUrl}/live.txt`,
+        epg
+      },
+      {
+        name: "IPTV-M3U",
+        url: `${cleanBaseUrl}/playlist.m3u`,
+        epg
+      }
+    ]
+  };
+}
+
 function generateTvboxDirectConfig(channels, baseUrl) {
   return {
     sites: [],
     ...generateJsonPlaylist(channels, baseUrl),
     parses: [],
     flags: []
-  };
-}
-
-function generateWarehouseConfig(baseUrl) {
-  const cleanBaseUrl = String(baseUrl || "").replace(/\/$/, "");
-
-  return {
-    urls: [
-      {
-        name: "IPTV直播",
-        url: `${cleanBaseUrl}/tvbox.json`
-      }
-    ]
   };
 }
 
@@ -203,6 +210,17 @@ export function createApp(store) {
 
     res
       .type("application/json")
+      .send(`${JSON.stringify(generateTvboxLiveSourceConfig(getBaseUrl(req)), null, 2)}\n`);
+  });
+
+  app.get("/tvbox-proxy.json", (req, res) => {
+    const channels = store.getChannels();
+    if (!ensureChannelsAvailable(res, channels)) {
+      return;
+    }
+
+    res
+      .type("application/json")
       .send(`${JSON.stringify(generateTvboxProxyConfig(getBaseUrl(req)), null, 2)}\n`);
   });
 
@@ -225,7 +243,7 @@ export function createApp(store) {
 
     res
       .type("application/json")
-      .send(`${JSON.stringify(generateWarehouseConfig(getBaseUrl(req)), null, 2)}\n`);
+      .send(`${JSON.stringify(generateTvboxLiveSourceConfig(getBaseUrl(req)), null, 2)}\n`);
   });
 
   app.get("/play/:channelId", (req, res) => {
