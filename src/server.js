@@ -49,6 +49,24 @@ export function createApp(store) {
     res.json(store.getChannels());
   });
 
+  app.put("/api/channels/:channelId/override", async (req, res) => {
+    try {
+      const override = await store.saveChannelOverride(req.params.channelId, req.body || {});
+      res.json({ override, channels: store.getChannels() });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/channels/:channelId/move", async (req, res) => {
+    try {
+      const order = await store.moveChannel(req.params.channelId, req.body?.direction);
+      res.json({ order, channels: store.getChannels() });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
   app.get("/api/sources", async (_req, res, next) => {
     try {
       res.json(await store.getSources());
@@ -77,7 +95,7 @@ export function createApp(store) {
   });
 
   app.get("/playlist.m3u", (req, res) => {
-    const channels = store.getChannels();
+    const channels = store.getOutputChannels ? store.getOutputChannels() : store.getChannels();
     if (!ensureChannelsAvailable(res, channels, "text")) {
       return;
     }
@@ -88,7 +106,7 @@ export function createApp(store) {
   });
 
   app.get("/playlist-sources.m3u", (req, res) => {
-    const channels = store.getChannels();
+    const channels = store.getOutputChannels ? store.getOutputChannels() : store.getChannels();
     if (!ensureChannelsAvailable(res, channels, "text")) {
       return;
     }
@@ -99,7 +117,18 @@ export function createApp(store) {
   });
 
   app.get("/live.txt", (req, res) => {
-    const channels = store.getChannels();
+    const channels = store.getOutputChannels ? store.getOutputChannels() : store.getChannels();
+    if (!ensureChannelsAvailable(res, channels, "text")) {
+      return;
+    }
+
+    res
+      .type("text/plain")
+      .send(generateLiveTxt(channels, getBaseUrl(req)));
+  });
+
+  app.get("/live.m3u", (req, res) => {
+    const channels = store.getOutputChannels ? store.getOutputChannels() : store.getChannels();
     if (!ensureChannelsAvailable(res, channels, "text")) {
       return;
     }

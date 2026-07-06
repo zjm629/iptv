@@ -1,19 +1,22 @@
 # IPTV M3U Manager
 
-一个适合部署到 VPS 的 IPTV M3U 管理服务。它可以从网页填写一个或多个远程 M3U 采集地址，自动合并重复频道，并输出你自己的去重 M3U 地址。
+一个适合部署到 VPS 的 IPTV 管理服务。它可以从网页填写一个或多个远程 M3U 采集地址，自动合并重复频道，并输出适合电视软件使用的播放源。
 
 ## 功能
 
 - Docker Compose 一键部署。
 - 默认端口 `3080`。
-- 在网页里新增、修改、删除采集源。
+- 网页新增、修改、删除采集源。
 - 保存采集源后立即刷新。
 - 启动时立即更新，之后每 2 小时自动更新一次。
 - 多个 M3U 源统一归并，同名频道只显示一个。
-- 同一频道保留多条线路，可在网页里自由选择。
-- 提供去重后的播放列表地址 `/playlist.m3u`。
-- 提供电视 APP 多信号源播放列表地址 `/playlist-sources.m3u`。
-- 提供 TVBox/部分播放器可识别的直播 TXT 地址 `/live.txt`。
+- 同一频道保留多条线路。
+- 网页可隐藏/恢复频道。
+- 网页可上移/下移频道。
+- 网页可设置某个频道的默认线路。
+- 网页可禁用/启用某条线路。
+- 输出 TVBox/影视仓常用的 TXT 单行多源格式 `/live.txt`。
+- 额外输出同内容的 `/live.m3u`，方便电脑端软件测试。
 
 ## 部署到 VPS
 
@@ -47,27 +50,46 @@ http://你的VPS-IP:3080
 - 名称：可选，例如 `重庆源`
 - M3U 地址：必填，例如 `http://example.com/list.m3u`
 
-可以添加多个采集源。点击“保存并刷新”后，服务会写入配置并立即抓取频道。
+点击“保存并刷新”后，服务会写入配置并立即抓取频道。
 
-IPTV 播放器里填写你的输出地址：
+## 推荐播放地址
 
-```text
-http://你的VPS-IP:3080/playlist.m3u
-```
-
-如果你的电视 APP 支持“信号源”菜单，建议填写多信号源地址：
-
-```text
-http://你的VPS-IP:3080/playlist-sources.m3u
-```
-
-这个地址会把同一个频道的多条线路输出为同名、同 `tvg-id` 的多条记录，方便播放器识别为同频道的多个信号源。
-
-如果你的电视 APP 支持 TVBox 直播 TXT 源，可以尝试：
+电视仓/影视仓优先测试：
 
 ```text
 http://你的VPS-IP:3080/live.txt
 ```
+
+电脑端软件如果更喜欢 `.m3u` 后缀，可以测试：
+
+```text
+http://你的VPS-IP:3080/live.m3u
+```
+
+这两个地址内容相同，格式类似：
+
+```text
+央视频道,#genre#
+CCTV1 综合,http://源1#http://源2#http://源3
+```
+
+## 频道管理
+
+在网页频道列表里可以操作：
+
+- `隐藏`：该频道在网页上显示删除线，并且不会出现在 `/live.txt` 和 `/live.m3u`。
+- `恢复`：恢复已隐藏频道。
+- `上移` / `下移`：调整频道在输出文件里的顺序。
+- `设为默认`：把该线路放到这个频道的第一个源。
+- `禁用` / `启用`：控制某条线路是否参与输出。
+
+这些设置会保存到：
+
+```text
+config/channel-overrides.json
+```
+
+Docker 重建后仍会保留。
 
 ## 常用命令
 
@@ -105,12 +127,15 @@ docker compose up -d --build
 ## 常用接口
 
 - `GET /`：Web 管理页。
-- `GET /playlist.m3u`：去重后的播放列表。
-- `GET /playlist-sources.m3u`：同频道多信号源播放列表。
-- `GET /live.txt`：TVBox/影视仓直播 TXT 源。
+- `GET /live.txt`：推荐给电视仓/影视仓的 TXT 单行多源播放源。
+- `GET /live.m3u`：同 `/live.txt`，只是后缀为 `.m3u`。
+- `GET /playlist.m3u`：去重后的标准 M3U 播放列表。
+- `GET /playlist-sources.m3u`：同频道多信号源 M3U 播放列表。
 - `GET /api/sources`：当前采集源。
 - `PUT /api/sources`：保存采集源并刷新。
 - `GET /api/channels`：频道和线路 JSON。
+- `PUT /api/channels/:channelId/override`：保存频道隐藏、默认线路、禁用线路。
+- `POST /api/channels/:channelId/move`：上移或下移频道。
 - `GET /api/status`：刷新状态和源状态。
 - `POST /api/refresh`：手动刷新。
 - `GET /play/:channelId?source=0`：播放指定频道线路。
@@ -123,4 +148,10 @@ docker compose up -d --build
 config/sources.json
 ```
 
-这个目录已经通过 `docker-compose.yml` 挂载到容器里，所以容器重建后配置仍会保留。
+频道隐藏、排序和线路偏好会写入：
+
+```text
+config/channel-overrides.json
+```
+
+这些目录已经通过 `docker-compose.yml` 挂载到容器里，所以容器重建后配置仍会保留。

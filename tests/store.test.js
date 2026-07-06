@@ -8,8 +8,9 @@ async function createTempConfig(sources) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "iptv-store-"));
   const configPath = path.join(dir, "sources.json");
   const cachePath = path.join(dir, "cache.json");
+  const overridesPath = path.join(dir, "channel-overrides.json");
   await fs.writeFile(configPath, JSON.stringify(sources), "utf8");
-  return { dir, configPath, cachePath };
+  return { dir, configPath, cachePath, overridesPath };
 }
 
 describe("createStore", () => {
@@ -166,5 +167,79 @@ http://a.example/hunan.m3u8
         error: "network down"
       })
     ]);
+  });
+
+  test("applies channel overrides for output without deleting cached channels", async () => {
+    const { configPath, cachePath, overridesPath } = await createTempConfig([
+      { name: "Source A", url: "http://source-a.example/list.m3u" },
+      { name: "Source B", url: "http://source-b.example/list.m3u" }
+    ]);
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => `#EXTM3U
+#EXTINF:-1 group-title="CCTV",CCTV-1
+http://a.example/cctv1.m3u8
+#EXTINF:-1 group-title="CCTV",CCTV-2
+http://a.example/cctv2.m3u8
+`
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => `#EXTM3U
+#EXTINF:-1 group-title="CCTV",CCTV1
+http://b.example/cctv1.m3u8
+`
+      });
+
+    const store = createStore({ configPath, cachePath, overridesPath, fetchImpl: fetchMock });
+    await store.load();
+    await store.refresh();
+    await store.saveChannelOverride("cctv1", {
+      preferredSourceUrl: "http://b.example/cctv1.m3u8",
+      disabledSourceUrls: ["http://a.example/cctv1.m3u8"]
+    });
+    await store.saveChannelOverride("cctv2", { hidden: true });
+    await store.moveChannel("cctv2", "up");
+
+    expect(store.getChannels()).toEqual([
+      expect.objectContaining({
+        id: "cctv2",
+        hidden: true
+      }),
+      expect.objectContaining({
+        id: "cctv1",
+        hidden: false,
+        sources: [
+          expect.objectContaining({ url: "http://a.example/cctv1.m3u8", disabled: true, preferred: false }),
+          expect.objectContaining({ url: "http://b.example/cctv1.m3u8", disabled: false, preferred: true })
+        ]
+      })
+    ]);
+    expect(store.getOutputChannels()).toEqual([
+      expect.objectContaining({
+        id: "cctv1",
+        defaultSourceIndex: 1,
+        sources: [
+          expect.objectContaining({ url: "http://b.example/cctv1.m3u8", sourceIndex: 1 })
+        ]
+      })
+    ]);
+    expect(JSON.parse(await fs.readFile(overridesPath, "utf8"))).toEqual({
+      channels: {
+        cctv1: {
+          hidden: false,
+          preferredSourceUrl: "http://b.example/cctv1.m3u8",
+          disabledSourceUrls: ["http://a.example/cctv1.m3u8"]
+        },
+        cctv2: {
+          hidden: true,
+          preferredSourceUrl: "",
+          disabledSourceUrls: []
+        }
+      },
+      order: ["cctv2", "cctv1"]
+    });
   });
 });

@@ -20,7 +20,10 @@ function createFakeStore() {
     refresh: jest.fn(async () => ({ ok: true })),
     getSources: jest.fn(async () => [{ name: "A", url: "http://a.example/list.m3u" }]),
     saveSources: jest.fn(async (sources) => sources),
+    saveChannelOverride: jest.fn(async (_id, override) => override),
+    moveChannel: jest.fn(async () => ["cctv1"]),
     getChannels: () => channels,
+    getOutputChannels: () => channels,
     getChannel: (id) => channels.find((channel) => channel.id === id) || null,
     getStatus: () => ({
       lastRefreshAt: "2026-07-05T00:00:00.000Z",
@@ -76,6 +79,40 @@ describe("server routes", () => {
       "CCTV-1,http://vps.example:3080/play/cctv1?source=0#http://vps.example:3080/play/cctv1?source=1"
     );
     expect(response.text).not.toContain("$[");
+  });
+
+  test("returns live m3u alias using the same txt multi-source format", async () => {
+    const response = await request(createApp(createFakeStore()))
+      .get("/live.m3u")
+      .set("Host", "vps.example:3080");
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("CCTV,#genre#");
+    expect(response.text).toContain(
+      "CCTV-1,http://vps.example:3080/play/cctv1?source=0#http://vps.example:3080/play/cctv1?source=1"
+    );
+  });
+
+  test("saves channel override settings", async () => {
+    const store = createFakeStore();
+    const response = await request(createApp(store))
+      .put("/api/channels/cctv1/override")
+      .send({ hidden: true });
+
+    expect(response.status).toBe(200);
+    expect(store.saveChannelOverride).toHaveBeenCalledWith("cctv1", { hidden: true });
+    expect(response.body.channels[0].id).toBe("cctv1");
+  });
+
+  test("moves channels in the configured order", async () => {
+    const store = createFakeStore();
+    const response = await request(createApp(store))
+      .post("/api/channels/cctv1/move")
+      .send({ direction: "up" });
+
+    expect(response.status).toBe(200);
+    expect(store.moveChannel).toHaveBeenCalledWith("cctv1", "up");
+    expect(response.body.order).toEqual(["cctv1"]);
   });
 
   test("public playlist JSON endpoints are removed", async () => {
@@ -161,6 +198,9 @@ describe("server routes", () => {
     expect(response.text).toContain("source-editor");
     expect(response.text).toContain("playlist-sources.m3u");
     expect(response.text).toContain("live.txt");
+    expect(response.text).toContain("live.m3u");
+    expect(response.text).toContain("设为默认");
+    expect(response.text).toContain("上移");
     expect(response.text).not.toContain("playlist.json");
     expect(response.text).not.toContain("tvbox.json");
     expect(response.text).not.toContain("warehouse.json");

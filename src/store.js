@@ -30,6 +30,40 @@ function createInitialStatus() {
   };
 }
 
+function createInitialOverrides() {
+  return {
+    channels: {},
+    order: []
+  };
+}
+
+function normalizeOverride(value = {}) {
+  return {
+    hidden: Boolean(value.hidden),
+    preferredSourceUrl: String(value.preferredSourceUrl || "").trim(),
+    disabledSourceUrls: Array.isArray(value.disabledSourceUrls)
+      ? Array.from(new Set(value.disabledSourceUrls.map((url) => String(url || "").trim()).filter(Boolean)))
+      : []
+  };
+}
+
+function normalizeOverrides(value) {
+  const normalized = createInitialOverrides();
+  const sourceChannels = value && typeof value === "object" && value.channels && typeof value.channels === "object"
+    ? value.channels
+    : {};
+
+  for (const [id, override] of Object.entries(sourceChannels)) {
+    normalized.channels[id] = normalizeOverride(override);
+  }
+
+  if (Array.isArray(value?.order)) {
+    normalized.order = Array.from(new Set(value.order.map((id) => String(id || "").trim()).filter(Boolean)));
+  }
+
+  return normalized;
+}
+
 function normalizeSources(sources) {
   if (!Array.isArray(sources)) {
     throw new Error("Sources must be an array");
@@ -92,13 +126,62 @@ function mergeEntries(entries) {
   return Array.from(byKey.values());
 }
 
+function applyChannelOrder(sourceChannels, order) {
+  const byId = new Map(sourceChannels.map((channel) => [channel.id, channel]));
+  const ordered = [];
+
+  for (const id of order) {
+    const channel = byId.get(id);
+    if (channel) {
+      ordered.push(channel);
+      byId.delete(id);
+    }
+  }
+
+  ordered.push(...byId.values());
+  return ordered;
+}
+
 export function createStore(options = {}) {
   const configPath = options.configPath || process.env.SOURCES_PATH || path.join(process.cwd(), "config", "sources.json");
   const cachePath = options.cachePath || process.env.CACHE_PATH || path.join(process.cwd(), "data", "cache.json");
+  const overridesPath = options.overridesPath || process.env.OVERRIDES_PATH || path.join(process.cwd(), "config", "channel-overrides.json");
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   let channels = [];
+  let overrides = createInitialOverrides();
   let status = createInitialStatus();
   let refreshPromise = null;
+
+  function decorateChannel(channel) {
+    const override = normalizeOverride(overrides.channels[channel.id]);
+    const disabledUrls = new Set(override.disabledSourceUrls);
+    const decoratedSources = channel.sources.map((source, index) => ({
+      ...source,
+      sourceIndex: index,
+      disabled: disabledUrls.has(source.url),
+      preferred: Boolean(override.preferredSourceUrl && source.url === override.preferredSourceUrl)
+    }));
+
+    return {
+      ...channel,
+      hidden: override.hidden,
+      defaultSourceIndex: decoratedSources.find((source) => source.preferred && !source.disabled)?.sourceIndex ?? 0,
+      sources: decoratedSources
+    };
+  }
+
+  function getDecoratedChannels() {
+    return applyChannelOrder(channels.map(decorateChannel), overrides.order);
+  }
+
+  async function loadOverrides() {
+    overrides = normalizeOverrides(await readJson(overridesPath, createInitialOverrides()));
+  }
+
+  async function persistOverrides() {
+    await fs.mkdir(path.dirname(overridesPath), { recursive: true });
+    await fs.writeFile(overridesPath, `${JSON.stringify(overrides, null, 2)}\n`, "utf8");
+  }
 
   async function loadCache() {
     const cache = await readJson(cachePath, null);
@@ -183,6 +266,7 @@ export function createStore(options = {}) {
   return {
     async load() {
       await loadCache();
+      await loadOverrides();
     },
     getSources() {
       return readSources(configPath);
@@ -192,6 +276,39 @@ export function createStore(options = {}) {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, `${JSON.stringify(normalizedSources, null, 2)}\n`, "utf8");
       return normalizedSources;
+    },
+    async saveChannelOverride(id, override) {
+      const channelId = String(id || "").trim();
+      if (!channelId) {
+        throw new Error("Channel id is required");
+      }
+
+      const existing = normalizeOverride(overrides.channels[channelId]);
+      overrides.channels[channelId] = normalizeOverride({ ...existing, ...override });
+      await persistOverrides();
+      return overrides.channels[channelId];
+    },
+    async moveChannel(id, direction) {
+      const channelId = String(id || "").trim();
+      if (!channelId) {
+        throw new Error("Channel id is required");
+      }
+
+      const currentOrder = getDecoratedChannels().map((channel) => channel.id);
+      const index = currentOrder.indexOf(channelId);
+      if (index === -1) {
+        throw new Error("Channel not found");
+      }
+
+      const delta = direction === "up" ? -1 : direction === "down" ? 1 : 0;
+      const nextIndex = index + delta;
+      if (delta !== 0 && nextIndex >= 0 && nextIndex < currentOrder.length) {
+        [currentOrder[index], currentOrder[nextIndex]] = [currentOrder[nextIndex], currentOrder[index]];
+      }
+
+      overrides.order = currentOrder;
+      await persistOverrides();
+      return overrides.order;
     },
     refresh() {
       if (!refreshPromise) {
@@ -203,10 +320,28 @@ export function createStore(options = {}) {
       return refreshPromise;
     },
     getChannels() {
-      return channels;
+      return getDecoratedChannels();
+    },
+    getOutputChannels() {
+      return getDecoratedChannels()
+        .filter((channel) => !channel.hidden)
+        .map((channel) => {
+          const enabledSources = channel.sources.filter((source) => !source.disabled);
+          const preferredIndex = enabledSources.findIndex((source) => source.preferred);
+          if (preferredIndex > 0) {
+            enabledSources.unshift(...enabledSources.splice(preferredIndex, 1));
+          }
+
+          return {
+            ...channel,
+            defaultSourceIndex: enabledSources[0]?.sourceIndex ?? channel.defaultSourceIndex,
+            sources: enabledSources
+          };
+        })
+        .filter((channel) => channel.sources.length > 0);
     },
     getChannel(id) {
-      return channels.find((channel) => channel.id === id) || null;
+      return getDecoratedChannels().find((channel) => channel.id === id) || null;
     },
     getStatus() {
       return { ...status, refreshing: Boolean(refreshPromise) || status.refreshing };

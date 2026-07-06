@@ -87,7 +87,8 @@ export function generatePlaylist(channels, baseUrl) {
     }
 
     lines.push(`#EXTINF:-1 ${attrs.join(" ")},${channel.name}`);
-    lines.push(`${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}`);
+    const sourceIndex = channel.sources?.[0]?.sourceIndex ?? channel.defaultSourceIndex ?? 0;
+    lines.push(`${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${sourceIndex}`);
   }
 
   return `${lines.join("\n")}\n`;
@@ -114,7 +115,8 @@ export function generateSourcePlaylist(channels, baseUrl) {
       }
 
       lines.push(`#EXTINF:-1 ${attrs.join(" ")},${channel.name}`);
-      lines.push(`${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${sourceIndex}`);
+      const playSourceIndex = sources[sourceIndex]?.sourceIndex ?? sourceIndex;
+      lines.push(`${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${playSourceIndex}`);
     }
   }
 
@@ -133,7 +135,7 @@ export function generateLiveTxt(channels, baseUrl) {
 
     const sources = channel.sources?.length ? channel.sources : [{}];
     const joinedUrls = sources
-      .map((_source, index) => `${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${index}`)
+      .map((source, index) => `${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${source.sourceIndex ?? index}`)
       .join("#");
 
     groups.get(groupName).push(`${escapeLiveValue(channel.name)},${joinedUrls}`);

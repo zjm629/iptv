@@ -75,6 +75,13 @@ export function renderHomePage() {
       color: var(--danger);
       border-color: #f0b8b2;
     }
+    button.linklike {
+      min-height: 32px;
+      padding: 0 10px;
+      background: white;
+      color: var(--text);
+      border-color: var(--line);
+    }
     .muted { color: var(--muted); }
     .source-ok { color: var(--accent); }
     .source-bad { color: var(--danger); }
@@ -89,9 +96,9 @@ export function renderHomePage() {
       gap: 10px;
       align-items: center;
     }
-    .source-actions {
+    .source-actions, .channel-actions, .line-actions {
       display: flex;
-      gap: 10px;
+      gap: 8px;
       align-items: center;
       flex-wrap: wrap;
     }
@@ -99,14 +106,25 @@ export function renderHomePage() {
       display: grid;
       gap: 10px;
     }
+    .channel.hidden summary strong {
+      text-decoration: line-through;
+      color: var(--muted);
+    }
     .channel summary {
       cursor: pointer;
-      display: flex;
-      justify-content: space-between;
+      display: grid;
+      grid-template-columns: 1fr auto;
       gap: 12px;
+      align-items: center;
       list-style: none;
     }
     .channel summary::-webkit-details-marker { display: none; }
+    .channel-title {
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+      flex-wrap: wrap;
+    }
     .lines {
       margin-top: 12px;
       display: grid;
@@ -114,20 +132,36 @@ export function renderHomePage() {
     }
     .line {
       display: grid;
-      grid-template-columns: minmax(120px, 180px) 1fr;
+      grid-template-columns: minmax(140px, 220px) 1fr auto;
       gap: 10px;
       align-items: center;
       overflow-wrap: anywhere;
       color: var(--muted);
       font-size: 14px;
+      border-top: 1px solid var(--line);
+      padding-top: 8px;
     }
-    @media (max-width: 760px) {
-      header, .toolbar, .source-row {
+    .line.disabled {
+      opacity: 0.55;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: var(--soft);
+      color: var(--accent);
+      font-size: 12px;
+    }
+    @media (max-width: 860px) {
+      header, .toolbar, .source-row, .line {
         grid-template-columns: 1fr;
         align-items: stretch;
       }
-      .toolbar { display: grid; }
-      .line { grid-template-columns: 1fr; }
+      .channel summary {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -155,6 +189,7 @@ export function renderHomePage() {
       <a id="playlist" href="/playlist.m3u">playlist.m3u</a>
       <a id="playlist-sources" href="/playlist-sources.m3u">playlist-sources.m3u</a>
       <a id="live-txt" href="/live.txt">live.txt</a>
+      <a id="live-m3u" href="/live.m3u">live.m3u</a>
     </section>
     <section class="status" id="status"></section>
     <section class="channels" id="channels"></section>
@@ -171,6 +206,20 @@ export function renderHomePage() {
         '"': "&quot;",
         "'": "&#39;"
       }[char]));
+    }
+
+    async function postJson(url, payload) {
+      const response = await fetch(url, {
+        method: url.includes("/move") ? "POST" : "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "操作失败");
+      }
+      state.channels = result.channels;
+      renderChannels();
     }
 
     function renderStatus() {
@@ -221,13 +270,66 @@ export function renderHomePage() {
         channel.name.toLowerCase().includes(keyword) || channel.id.includes(keyword)
       );
       $("channels").innerHTML = filtered.map((channel) =>
-        "<details class='channel'><summary><strong>" + escapeHtml(channel.name) + "</strong><span class='muted'>" +
-        channel.sources.length + " 条线路</span></summary><div class='lines'>" +
-        channel.sources.map((source, index) =>
-          "<div class='line'><a href='/play/" + encodeURIComponent(channel.id) + "?source=" + index + "'>线路 " +
-          (index + 1) + " - " + escapeHtml(source.sourceName) + "</a><span>" + escapeHtml(source.url) + "</span></div>"
+        "<details class='channel " + (channel.hidden ? "hidden" : "") + "'><summary>" +
+        "<span class='channel-title'><strong>" + escapeHtml(channel.name) + "</strong><span class='muted'>" +
+        channel.sources.length + " 条线路</span>" + (channel.hidden ? "<span class='badge'>已隐藏</span>" : "") + "</span>" +
+        "<span class='channel-actions'>" +
+        "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='up'>上移</button>" +
+        "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='down'>下移</button>" +
+        "<button class='" + (channel.hidden ? "secondary" : "danger") + " toggle-channel' data-id='" + escapeHtml(channel.id) + "' data-hidden='" + (!channel.hidden) + "'>" +
+        (channel.hidden ? "恢复" : "隐藏") + "</button>" +
+        "</span></summary><div class='lines'>" +
+        channel.sources.map((source) =>
+          "<div class='line " + (source.disabled ? "disabled" : "") + "'>" +
+          "<a href='/play/" + encodeURIComponent(channel.id) + "?source=" + source.sourceIndex + "'>线路 " +
+          (source.sourceIndex + 1) + " - " + escapeHtml(source.sourceName) + "</a><span>" + escapeHtml(source.url) + "</span>" +
+          "<span class='line-actions'>" +
+          (source.preferred ? "<span class='badge'>默认</span>" : "<button class='linklike prefer-source' data-id='" + escapeHtml(channel.id) + "' data-url='" + escapeHtml(source.url) + "'>设为默认</button>") +
+          "<button class='" + (source.disabled ? "secondary" : "danger") + " toggle-source' data-id='" + escapeHtml(channel.id) + "' data-url='" + escapeHtml(source.url) + "' data-disabled='" + (!source.disabled) + "'>" +
+          (source.disabled ? "启用" : "禁用") + "</button>" +
+          "</span></div>"
         ).join("") + "</div></details>"
       ).join("");
+
+      document.querySelectorAll(".toggle-channel").forEach((button) => {
+        button.addEventListener("click", async (event) => {
+          event.preventDefault();
+          await postJson("/api/channels/" + encodeURIComponent(button.dataset.id) + "/override", {
+            hidden: button.dataset.hidden === "true"
+          });
+        });
+      });
+      document.querySelectorAll(".move-channel").forEach((button) => {
+        button.addEventListener("click", async (event) => {
+          event.preventDefault();
+          await postJson("/api/channels/" + encodeURIComponent(button.dataset.id) + "/move", {
+            direction: button.dataset.direction
+          });
+        });
+      });
+      document.querySelectorAll(".prefer-source").forEach((button) => {
+        button.addEventListener("click", async (event) => {
+          event.preventDefault();
+          await postJson("/api/channels/" + encodeURIComponent(button.dataset.id) + "/override", {
+            preferredSourceUrl: button.dataset.url
+          });
+        });
+      });
+      document.querySelectorAll(".toggle-source").forEach((button) => {
+        button.addEventListener("click", async (event) => {
+          event.preventDefault();
+          const channel = state.channels.find((item) => item.id === button.dataset.id);
+          const disabled = new Set(channel.sources.filter((source) => source.disabled).map((source) => source.url));
+          if (button.dataset.disabled === "true") {
+            disabled.add(button.dataset.url);
+          } else {
+            disabled.delete(button.dataset.url);
+          }
+          await postJson("/api/channels/" + encodeURIComponent(button.dataset.id) + "/override", {
+            disabledSourceUrls: Array.from(disabled)
+          });
+        });
+      });
     }
 
     async function load() {
@@ -272,7 +374,7 @@ export function renderHomePage() {
       $("save-sources").disabled = false;
     });
     $("copy").addEventListener("click", async () => {
-      await navigator.clipboard.writeText(new URL("/playlist.m3u", location.href).href);
+      await navigator.clipboard.writeText(new URL("/live.txt", location.href).href);
       $("copy").textContent = "已复制";
       setTimeout(() => $("copy").textContent = "复制播放列表地址", 1200);
     });
