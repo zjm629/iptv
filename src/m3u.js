@@ -27,10 +27,6 @@ function escapeLiveValue(value = "") {
   return String(value).replaceAll("\r", " ").replaceAll("\n", " ").trim();
 }
 
-function formatLiveSourceLabel(value, fallback) {
-  return escapeLiveValue(value || fallback).replaceAll("]", "").replaceAll("#", "");
-}
-
 export function parseM3u(text, sourceName) {
   const lines = String(text || "").split(/\r?\n/);
   const entries = [];
@@ -137,10 +133,7 @@ export function generateLiveTxt(channels, baseUrl) {
 
     const sources = channel.sources?.length ? channel.sources : [{}];
     const joinedUrls = sources
-      .map((source, index) => {
-        const label = formatLiveSourceLabel(source.sourceName, `Line ${index + 1}`);
-        return `$[${label}]${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${index}`;
-      })
+      .map((_source, index) => `${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${index}`)
       .join("#");
 
     groups.get(groupName).push(`${escapeLiveValue(channel.name)},${joinedUrls}`);

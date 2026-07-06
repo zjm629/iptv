@@ -73,8 +73,9 @@ describe("server routes", () => {
     expect(response.headers["content-type"]).toContain("text/plain");
     expect(response.text).toContain("CCTV,#genre#");
     expect(response.text).toContain(
-      "CCTV-1,$[A]http://vps.example:3080/play/cctv1?source=0#$[B]http://vps.example:3080/play/cctv1?source=1"
+      "CCTV-1,http://vps.example:3080/play/cctv1?source=0#http://vps.example:3080/play/cctv1?source=1"
     );
+    expect(response.text).not.toContain("$[");
   });
 
   test("public playlist JSON endpoints are removed", async () => {
