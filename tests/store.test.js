@@ -102,6 +102,32 @@ http://b.example/cctv1.m3u8
     ]);
   });
 
+  test("preserves multicast proxy sources when their full urls differ", async () => {
+    const { configPath, cachePath } = await createTempConfig([
+      { name: "Source A", url: "http://source-a.example/list.m3u" }
+    ]);
+    const fetchMock = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      text: async () => `#EXTM3U
+#EXTINF:-1 group-title="Sports",广东体育
+http://www.maomizi.cn:9528/rtp/239.77.0.112:5146
+#EXTINF:-1 group-title="Sports",广东体育
+http://www.maomizi.cn:9529/rtp/239.77.0.112:5146
+#EXTINF:-1 group-title="Sports",广东体育
+http://www.tyio.cc:8188/rtp/239.77.0.168:5146
+`
+    });
+
+    const store = createStore({ configPath, cachePath, fetchImpl: fetchMock });
+    await store.refresh();
+
+    expect(store.getChannel("广东体育").sources.map((source) => source.url)).toEqual([
+      "http://www.maomizi.cn:9528/rtp/239.77.0.112:5146",
+      "http://www.maomizi.cn:9529/rtp/239.77.0.112:5146",
+      "http://www.tyio.cc:8188/rtp/239.77.0.168:5146"
+    ]);
+  });
+
   test("preserves first-seen channel order across sources", async () => {
     const { configPath, cachePath } = await createTempConfig([
       { name: "Source A", url: "http://source-a.example/list.m3u" },
