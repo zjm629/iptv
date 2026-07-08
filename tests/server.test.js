@@ -2,8 +2,8 @@ import request from "supertest";
 import { jest } from "@jest/globals";
 import { createApp } from "../src/server.js";
 
-function createFakeStore() {
-  const channels = [
+function createFakeStore(channelOverrides) {
+  const channels = channelOverrides || [
     {
       id: "cctv1",
       name: "CCTV-1",
@@ -211,6 +211,64 @@ describe("server routes", () => {
     expect(response.text).toContain("hls.js");
   });
 
+  test("serves mpeg-ts player support for http rtp proxy streams", async () => {
+    const store = createFakeStore([
+      {
+        id: "sc",
+        name: "SCTV",
+        sources: [
+          { sourceIndex: 0, sourceName: "RTP Proxy", url: "http://www.maomizi.cn:9528/rtp/239.253.43.119:5146" }
+        ]
+      }
+    ]);
+
+    const response = await request(createApp(store))
+      .get("/player/sc?source=0")
+      .set("Host", "vps.example:3080");
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("mpegts.js");
+    expect(response.text).toContain("/stream/sc?source=0");
+    expect(response.text).toContain("使用 mpegts.js");
+  });
+
+  test("proxies stream data for browser source testing", async () => {
+    const originalFetch = global.fetch;
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("stream-data"));
+        controller.close();
+      }
+    });
+    global.fetch = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-type": "video/mp2t" }),
+      body
+    }));
+
+    try {
+      const store = createFakeStore([
+        {
+          id: "sc",
+          name: "SCTV",
+          sources: [
+            { sourceIndex: 0, sourceName: "RTP Proxy", url: "http://www.maomizi.cn:9528/rtp/239.253.43.119:5146" }
+          ]
+        }
+      ]);
+
+      const response = await request(createApp(store)).get("/stream/sc?source=0");
+
+      expect(response.status).toBe(200);
+      expect(response.headers["content-type"]).toContain("video/mp2t");
+      expect(Buffer.from(response.body).toString("utf8")).toBe("stream-data");
+      expect(global.fetch).toHaveBeenCalledWith("http://www.maomizi.cn:9528/rtp/239.253.43.119:5146", expect.objectContaining({ redirect: "follow" }));
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
   test("triggers manual refresh", async () => {
     const store = createFakeStore();
     const response = await request(createApp(store)).post("/api/refresh");
@@ -262,7 +320,8 @@ describe("server routes", () => {
     expect(response.text).toContain("live.m3u");
     expect(response.text).toContain("sort-order");
     expect(response.text).toContain("序号");
-    expect(response.text).toContain("category-select");
+    expect(response.text).toContain("category-checkbox");
+    expect(response.text).toContain("move-category");
     expect(response.text).toContain("分类");
     expect(response.text).toContain("测试播放");
     expect(response.text).toContain("设为默认");

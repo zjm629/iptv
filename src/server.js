@@ -1,6 +1,7 @@
 import express from "express";
 import cron from "node-cron";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { generateLiveM3u, generateLiveTxt, generatePlaylist, generateSourcePlaylist } from "./m3u.js";
 import { createStore } from "./store.js";
@@ -182,8 +183,60 @@ export function createApp(store) {
       return;
     }
 
-    const playUrl = `${getBaseUrl(req)}/play/${encodeURIComponent(channel.id)}?source=${source.sourceIndex ?? sourceIndex}`;
-    res.type("html").send(renderPlayerPage({ channel, source, playUrl }));
+    const stableSourceIndex = source.sourceIndex ?? sourceIndex;
+    const playUrl = `${getBaseUrl(req)}/play/${encodeURIComponent(channel.id)}?source=${stableSourceIndex}`;
+    const streamUrl = `${getBaseUrl(req)}/stream/${encodeURIComponent(channel.id)}?source=${stableSourceIndex}`;
+    res.type("html").send(renderPlayerPage({ channel, source, playUrl, streamUrl }));
+  });
+
+  app.get("/stream/:channelId", async (req, res, next) => {
+    try {
+      const channel = store.getChannel(req.params.channelId);
+      if (!channel) {
+        res.status(404).send("Channel not found");
+        return;
+      }
+
+      const sourceIndex = Number.parseInt(req.query.source || "0", 10);
+      const source = findChannelSource(channel, sourceIndex);
+      if (!source) {
+        res.status(404).send("Source not found");
+        return;
+      }
+
+      if (!/^https?:\/\//i.test(source.url)) {
+        res.status(400).send("Only HTTP and HTTPS streams can be proxied.");
+        return;
+      }
+
+      const controller = new AbortController();
+      req.on("close", () => controller.abort());
+      const upstream = await fetch(source.url, {
+        redirect: "follow",
+        signal: controller.signal
+      });
+
+      if (!upstream.ok) {
+        res.status(upstream.status).send(`Upstream responded with ${upstream.status}`);
+        return;
+      }
+
+      res.status(upstream.status);
+      res.setHeader("content-type", upstream.headers.get("content-type") || "video/mp2t");
+      res.setHeader("cache-control", "no-store");
+
+      if (!upstream.body) {
+        res.end();
+        return;
+      }
+
+      Readable.fromWeb(upstream.body).on("error", next).pipe(res);
+    } catch (error) {
+      if (error.name === "AbortError") {
+        return;
+      }
+      next(error);
+    }
   });
 
   app.get("/play/:channelId", (req, res) => {

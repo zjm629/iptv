@@ -152,10 +152,29 @@ export function renderHomePage() {
       min-height: 32px;
       padding: 0 8px;
     }
-    .category-select {
-      width: 150px;
-      min-height: 62px;
-      padding: 4px 8px;
+    .category-options {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      max-width: 420px;
+    }
+    .category-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 30px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: white;
+      color: var(--text);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .category-checkbox {
+      width: auto;
+      min-height: auto;
+      margin: 0;
     }
     .lines {
       margin-top: 12px;
@@ -304,9 +323,26 @@ export function renderHomePage() {
         "<div class='category-row' data-index='" + index + "'>" +
         "<input class='category-name' value='" + escapeHtml(category) + "' " + (index === 0 ? "readonly" : "") + ">" +
         "<span class='muted'>" + (index === 0 ? "默认打开" : "自定义分类") + "</span>" +
+        "<span class='category-actions'>" +
+        "<button class='linklike move-category' data-index='" + index + "' data-direction='up' " + (index <= 1 ? "disabled" : "") + ">上移</button>" +
+        "<button class='linklike move-category' data-index='" + index + "' data-direction='down' " + (index === 0 || index === rows.length - 1 ? "disabled" : "") + ">下移</button>" +
         "<button class='danger remove-category' data-index='" + index + "' " + (index === 0 ? "disabled" : "") + ">删除</button>" +
+        "</span>" +
         "</div>"
       ).join("");
+      document.querySelectorAll(".move-category").forEach((button) => {
+        button.addEventListener("click", () => {
+          syncCategoriesFromInputs();
+          const index = Number(button.dataset.index);
+          const target = button.dataset.direction === "up" ? index - 1 : index + 1;
+          if (index <= 0 || target <= 0 || target >= state.categories.length) {
+            return;
+          }
+          [state.categories[index], state.categories[target]] = [state.categories[target], state.categories[index]];
+          renderCategories();
+          renderChannels();
+        });
+      });
       document.querySelectorAll(".remove-category").forEach((button) => {
         button.addEventListener("click", () => {
           syncCategoriesFromInputs();
@@ -342,11 +378,11 @@ export function renderHomePage() {
         "<span class='channel-actions'>" +
         "<label class='sort-control'>序号<input class='sort-order' type='number' min='1' step='1' placeholder='留空' data-id='" + escapeHtml(channel.id) + "' value='" +
         (Number.isFinite(channel.sortOrder) ? escapeHtml(channel.sortOrder) : "") + "'></label>" +
-        "<label class='sort-control'>分类<select class='category-select' multiple data-id='" + escapeHtml(channel.id) + "'>" +
+        "<span class='sort-control'>分类<span class='category-options'>" +
         state.categories.map((category) => {
-          const selected = (channel.customGroups || []).includes(category) ? " selected" : "";
-          return "<option value='" + escapeHtml(category) + "'" + selected + ">" + escapeHtml(category) + "</option>";
-        }).join("") + "</select></label>" +
+          const checked = (channel.customGroups || []).includes(category) ? " checked" : "";
+          return "<label class='category-option'><input class='category-checkbox' type='checkbox' data-id='" + escapeHtml(channel.id) + "' value='" + escapeHtml(category) + "'" + checked + ">" + escapeHtml(category) + "</label>";
+        }).join("") + "</span></span>" +
         "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='top'>置顶</button>" +
         "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='up'>上移</button>" +
         "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='down'>下移</button>" +
@@ -391,12 +427,18 @@ export function renderHomePage() {
           });
         });
       });
-      document.querySelectorAll(".category-select").forEach((select) => {
-        select.addEventListener("click", (event) => event.stopPropagation());
-        select.addEventListener("change", async (event) => {
+      const categoryCheckboxes = Array.from(document.querySelectorAll(".category-checkbox"));
+      document.querySelectorAll(".category-option").forEach((label) => {
+        label.addEventListener("click", (event) => event.stopPropagation());
+      });
+      categoryCheckboxes.forEach((checkbox) => {
+        checkbox.addEventListener("click", (event) => event.stopPropagation());
+        checkbox.addEventListener("change", async (event) => {
           event.preventDefault();
-          const customGroups = Array.from(select.selectedOptions).map((option) => option.value);
-          await postJson("/api/channels/" + encodeURIComponent(select.dataset.id) + "/override", {
+          const customGroups = categoryCheckboxes
+            .filter((item) => item.dataset.id === checkbox.dataset.id && item.checked)
+            .map((item) => item.value);
+          await postJson("/api/channels/" + encodeURIComponent(checkbox.dataset.id) + "/override", {
             customGroups
           });
         });
@@ -522,17 +564,19 @@ export function renderHomePage() {
 </html>`;
 }
 
-export function renderPlayerPage({ channel, source, playUrl }) {
+export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
   const channelName = escapeHtmlValue(channel?.name || "");
   const sourceName = escapeHtmlValue(source?.sourceName || "线路");
   const rawUrl = String(source?.url || "");
   const escapedRawUrl = escapeHtmlValue(rawUrl);
-  const escapedPlayUrl = escapeHtmlValue(playUrl);
   const lowerUrl = rawUrl.toLowerCase();
-  const likelyUnsupported = lowerUrl.startsWith("rtsp://") ||
+  const protocolUnsupported = lowerUrl.startsWith("rtsp://") ||
     lowerUrl.startsWith("rtp://") ||
-    lowerUrl.startsWith("udp://") ||
-    /\/(rtp|udp)\//i.test(rawUrl);
+    lowerUrl.startsWith("udp://");
+  const likelyMpegTs = /^https?:\/\//i.test(rawUrl) && (
+    /\/(rtp|udp)\//i.test(rawUrl) ||
+    lowerUrl.includes(".ts")
+  );
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -559,23 +603,47 @@ export function renderPlayerPage({ channel, source, playUrl }) {
       <div>原始地址：<a href="${escapedRawUrl}">${escapedRawUrl}</a></div>
     </section>
     <video id="player" controls autoplay playsinline></video>
-    <section class="panel" id="message">${likelyUnsupported ? "该线路可能不是浏览器原生支持的格式，请优先用电视端验证。" : "正在准备播放..."}</section>
+    <section class="panel" id="message">${protocolUnsupported ? "该线路协议不是浏览器可直接拉取的 HTTP/HTTPS，请优先用电视端验证。" : "正在准备播放..."}</section>
   </main>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mpegts.js@latest/dist/mpegts.min.js"></script>
   <script>
     const playUrl = ${JSON.stringify(playUrl)};
+    const streamUrl = ${JSON.stringify(streamUrl || playUrl)};
     const rawUrl = ${JSON.stringify(rawUrl)};
     const video = document.getElementById("player");
     const message = document.getElementById("message");
     const lower = rawUrl.toLowerCase();
-    const unsupported = ${JSON.stringify(likelyUnsupported)};
+    const protocolUnsupported = ${JSON.stringify(protocolUnsupported)};
+    const likelyMpegTs = ${JSON.stringify(likelyMpegTs)};
+    let tsPlayer = null;
 
     function setMessage(text) {
       message.textContent = text;
     }
 
-    if (unsupported) {
-      setMessage("浏览器通常不能直接播放 rtp/udp/rtsp 或部分组播代理流；如无法播放，请复制原始地址到电视端测试。");
+    window.addEventListener("beforeunload", () => {
+      if (tsPlayer) {
+        tsPlayer.destroy();
+      }
+    });
+
+    if (protocolUnsupported) {
+      setMessage("浏览器通常不能直接拉取 rtp://、udp://、rtsp://；如无法播放，请复制原始地址到电视端测试。");
+    } else if (likelyMpegTs) {
+      if (window.mpegts && mpegts.isSupported()) {
+        tsPlayer = mpegts.createPlayer({
+          type: "mpegts",
+          isLive: true,
+          url: streamUrl
+        });
+        tsPlayer.attachMediaElement(video);
+        tsPlayer.load();
+        tsPlayer.play().catch(() => {});
+        setMessage("使用 mpegts.js 播放 MPEG-TS/组播代理流。");
+      } else {
+        setMessage("当前浏览器不支持 mpegts.js 所需的 Media Source Extensions。");
+      }
     } else if (lower.includes(".m3u8")) {
       if (video.canPlayType("application/vnd.apple.mpegurl")) {
         video.src = playUrl;
