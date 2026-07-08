@@ -1,4 +1,5 @@
 import request from "supertest";
+import http from "node:http";
 import { jest } from "@jest/globals";
 import { createApp } from "../src/server.js";
 
@@ -235,23 +236,18 @@ describe("server routes", () => {
     expect(response.text).toContain("toggle-muted");
     expect(response.text).toContain("resetVideoElement");
     expect(response.text).toContain("MediaMSEError");
+    expect(response.text).toContain("enableWorker: true");
+    expect(response.text).toContain("stashInitialSize");
     expect(response.text).toContain("使用 mpegts.js");
   });
 
   test("proxies stream data for browser source testing", async () => {
-    const originalFetch = global.fetch;
-    const body = new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode("stream-data"));
-        controller.close();
-      }
+    const upstream = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "video/mp2t" });
+      res.end("stream-data");
     });
-    global.fetch = jest.fn(async () => ({
-      ok: true,
-      status: 200,
-      headers: new Headers({ "content-type": "video/mp2t" }),
-      body
-    }));
+    await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const { port } = upstream.address();
 
     try {
       const store = createFakeStore([
@@ -259,7 +255,7 @@ describe("server routes", () => {
           id: "sc",
           name: "SCTV",
           sources: [
-            { sourceIndex: 0, sourceName: "RTP Proxy", url: "http://www.maomizi.cn:9528/rtp/239.253.43.119:5146" }
+            { sourceIndex: 0, sourceName: "RTP Proxy", url: `http://127.0.0.1:${port}/live.ts` }
           ]
         }
       ]);
@@ -269,9 +265,8 @@ describe("server routes", () => {
       expect(response.status).toBe(200);
       expect(response.headers["content-type"]).toContain("video/mp2t");
       expect(Buffer.from(response.body).toString("utf8")).toBe("stream-data");
-      expect(global.fetch).toHaveBeenCalledWith("http://www.maomizi.cn:9528/rtp/239.253.43.119:5146", expect.objectContaining({ redirect: "follow" }));
     } finally {
-      global.fetch = originalFetch;
+      await new Promise((resolve) => upstream.close(resolve));
     }
   });
 

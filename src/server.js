@@ -1,7 +1,9 @@
 import express from "express";
 import cron from "node-cron";
+import http from "node:http";
+import https from "node:https";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { pipeline } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { generateLiveM3u, generateLiveTxt, generatePlaylist, generateSourcePlaylist } from "./m3u.js";
 import { createStore } from "./store.js";
@@ -38,6 +40,55 @@ function findChannelSource(channel, requestedSourceIndex) {
   return sources.find((source) => source.sourceIndex === requestedSourceIndex) ||
     sources[requestedSourceIndex] ||
     sources[0];
+}
+
+function proxyHttpStream(sourceUrl, res, next, redirects = 0) {
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(sourceUrl);
+  } catch (_error) {
+    res.status(400).send("Invalid stream URL.");
+    return null;
+  }
+
+  const client = parsedUrl.protocol === "https:" ? https : http;
+  const upstreamReq = client.request(parsedUrl, {
+    method: "GET",
+    headers: {
+      "user-agent": "Mozilla/5.0 IPTV-M3U-Manager/1.0",
+      "accept": "*/*",
+      "connection": "close"
+    }
+  }, (upstreamRes) => {
+    const location = upstreamRes.headers.location;
+    if (upstreamRes.statusCode >= 300 && upstreamRes.statusCode < 400 && location && redirects < 5) {
+      upstreamRes.resume();
+      const redirectUrl = new URL(location, parsedUrl).toString();
+      proxyHttpStream(redirectUrl, res, next, redirects + 1);
+      return;
+    }
+
+    if (upstreamRes.statusCode >= 400) {
+      res.status(upstreamRes.statusCode).send(`Upstream responded with ${upstreamRes.statusCode}`);
+      upstreamRes.resume();
+      return;
+    }
+
+    res.status(upstreamRes.statusCode || 200);
+    res.setHeader("content-type", upstreamRes.headers["content-type"] || "video/mp2t");
+    res.setHeader("cache-control", "no-store");
+    res.flushHeaders?.();
+
+    pipeline(upstreamRes, res, (error) => {
+      if (error && !res.destroyed) {
+        next(error);
+      }
+    });
+  });
+
+  upstreamReq.on("error", next);
+  upstreamReq.end();
+  return upstreamReq;
 }
 
 export function createApp(store) {
@@ -189,7 +240,7 @@ export function createApp(store) {
     res.type("html").send(renderPlayerPage({ channel, source, playUrl, streamUrl }));
   });
 
-  app.get("/stream/:channelId", async (req, res, next) => {
+  app.get("/stream/:channelId", (req, res, next) => {
     try {
       const channel = store.getChannel(req.params.channelId);
       if (!channel) {
@@ -209,36 +260,9 @@ export function createApp(store) {
         return;
       }
 
-      const controller = new AbortController();
-      res.on("close", () => controller.abort());
-      const upstream = await fetch(source.url, {
-        headers: {
-          "user-agent": "Mozilla/5.0 IPTV-M3U-Manager/1.0",
-          "accept": "*/*"
-        },
-        redirect: "follow",
-        signal: controller.signal
-      });
-
-      if (!upstream.ok) {
-        res.status(upstream.status).send(`Upstream responded with ${upstream.status}`);
-        return;
-      }
-
-      res.status(upstream.status);
-      res.setHeader("content-type", upstream.headers.get("content-type") || "video/mp2t");
-      res.setHeader("cache-control", "no-store");
-
-      if (!upstream.body) {
-        res.end();
-        return;
-      }
-
-      Readable.fromWeb(upstream.body).on("error", next).pipe(res);
+      const upstreamReq = proxyHttpStream(source.url, res, next);
+      res.on("close", () => upstreamReq?.destroy());
     } catch (error) {
-      if (error.name === "AbortError") {
-        return;
-      }
       next(error);
     }
   });

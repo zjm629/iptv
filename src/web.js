@@ -757,8 +757,13 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
         isLive: true,
         url: streamUrl
       }, {
+        enableWorker: true,
         enableStashBuffer: false,
-        lazyLoad: false
+        stashInitialSize: 64 * 1024,
+        lazyLoad: false,
+        autoCleanupSourceBuffer: true,
+        autoCleanupMaxBackwardDuration: 30,
+        autoCleanupMinBackwardDuration: 10
       });
       tsPlayer.on(mpegts.Events.ERROR, (type, detail, info) => {
         setMessage("mpegts.js 错误：" + type + " / " + detail + (info ? " / " + JSON.stringify(info) : ""));
