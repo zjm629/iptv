@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateLiveM3u, generateLiveTxt, generatePlaylist, generateSourcePlaylist } from "./m3u.js";
 import { createStore } from "./store.js";
-import { renderHomePage } from "./web.js";
+import { renderHomePage, renderPlayerPage } from "./web.js";
 
 const TEST_PLAYLIST_FILES = new Set([
   "test1.m3u",
@@ -32,6 +32,13 @@ function ensureChannelsAvailable(res, channels, type = "json") {
   return false;
 }
 
+function findChannelSource(channel, requestedSourceIndex) {
+  const sources = channel.sources || [];
+  return sources.find((source) => source.sourceIndex === requestedSourceIndex) ||
+    sources[requestedSourceIndex] ||
+    sources[0];
+}
+
 export function createApp(store) {
   const app = express();
   app.set("trust proxy", true);
@@ -53,6 +60,19 @@ export function createApp(store) {
     try {
       const override = await store.saveChannelOverride(req.params.channelId, req.body || {});
       res.json({ override, channels: store.getChannels() });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/categories", (_req, res) => {
+    res.json(store.getCategories ? store.getCategories() : ["推荐频道"]);
+  });
+
+  app.put("/api/categories", async (req, res) => {
+    try {
+      const categories = await store.saveCategories(req.body?.categories || []);
+      res.json({ categories, channels: store.getChannels() });
     } catch (error) {
       res.status(400).json({ error: error.message });
     }
@@ -124,7 +144,7 @@ export function createApp(store) {
 
     res
       .type("text/plain")
-      .send(generateLiveTxt(channels, getBaseUrl(req)));
+      .send(generateLiveTxt(channels, getBaseUrl(req), store.getCategories ? store.getCategories() : ["推荐频道"]));
   });
 
   app.get("/live.m3u", (req, res) => {
@@ -148,6 +168,24 @@ export function createApp(store) {
     res.sendFile(path.join(process.cwd(), fileName));
   });
 
+  app.get("/player/:channelId", (req, res) => {
+    const channel = store.getChannel(req.params.channelId);
+    if (!channel) {
+      res.status(404).send("Channel not found");
+      return;
+    }
+
+    const sourceIndex = Number.parseInt(req.query.source || "0", 10);
+    const source = findChannelSource(channel, sourceIndex);
+    if (!source) {
+      res.status(404).send("Source not found");
+      return;
+    }
+
+    const playUrl = `${getBaseUrl(req)}/play/${encodeURIComponent(channel.id)}?source=${source.sourceIndex ?? sourceIndex}`;
+    res.type("html").send(renderPlayerPage({ channel, source, playUrl }));
+  });
+
   app.get("/play/:channelId", (req, res) => {
     const channel = store.getChannel(req.params.channelId);
     if (!channel) {
@@ -156,7 +194,7 @@ export function createApp(store) {
     }
 
     const sourceIndex = Number.parseInt(req.query.source || "0", 10);
-    const source = channel.sources[sourceIndex] || channel.sources[0];
+    const source = findChannelSource(channel, sourceIndex);
     if (!source) {
       res.status(404).send("Source not found");
       return;

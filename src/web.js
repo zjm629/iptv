@@ -1,3 +1,13 @@
+function escapeHtmlValue(value) {
+  return String(value || "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  }[char]));
+}
+
 export function renderHomePage() {
   return `<!doctype html>
 <html lang="zh-CN">
@@ -40,7 +50,7 @@ export function renderHomePage() {
       gap: 16px;
       padding: 20px clamp(16px, 4vw, 40px) 40px;
     }
-    .toolbar, .status, .channel, .source-editor {
+    .toolbar, .status, .channel, .source-editor, .category-editor {
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -51,14 +61,14 @@ export function renderHomePage() {
       grid-template-columns: 1fr repeat(4, auto);
       gap: 10px;
     }
-    input, button {
+    input, button, select {
       min-height: 38px;
       border: 1px solid var(--line);
       border-radius: 6px;
       padding: 0 12px;
       font: inherit;
     }
-    input { width: 100%; }
+    input, select { width: 100%; }
     button {
       cursor: pointer;
       background: var(--accent);
@@ -75,28 +85,33 @@ export function renderHomePage() {
       color: var(--danger);
       border-color: #f0b8b2;
     }
-    button.linklike {
+    button.linklike, a.linklike {
+      display: inline-flex;
+      align-items: center;
       min-height: 32px;
       padding: 0 10px;
       background: white;
       color: var(--text);
       border-color: var(--line);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      text-decoration: none;
     }
     .muted { color: var(--muted); }
     .source-ok { color: var(--accent); }
     .source-bad { color: var(--danger); }
-    .source-list {
+    .source-list, .category-list {
       display: grid;
       gap: 10px;
       margin-bottom: 12px;
     }
-    .source-row {
+    .source-row, .category-row {
       display: grid;
       grid-template-columns: minmax(140px, 220px) 1fr auto;
       gap: 10px;
       align-items: center;
     }
-    .source-actions, .channel-actions, .line-actions {
+    .source-actions, .category-actions, .channel-actions, .line-actions {
       display: flex;
       gap: 8px;
       align-items: center;
@@ -137,10 +152,10 @@ export function renderHomePage() {
       min-height: 32px;
       padding: 0 8px;
     }
-    .custom-group {
-      width: 130px;
-      min-height: 32px;
-      padding: 0 8px;
+    .category-select {
+      width: 150px;
+      min-height: 62px;
+      padding: 4px 8px;
     }
     .lines {
       margin-top: 12px;
@@ -200,6 +215,15 @@ export function renderHomePage() {
         <span class="muted" id="source-message"></span>
       </div>
     </section>
+    <section class="category-editor">
+      <h2>分类</h2>
+      <div class="category-list" id="categories"></div>
+      <div class="category-actions">
+        <button class="secondary" id="add-category">新增分类</button>
+        <button id="save-categories">保存分类</button>
+        <span class="muted" id="category-message"></span>
+      </div>
+    </section>
     <section class="toolbar">
       <input id="search" type="search" placeholder="搜索频道">
       <button id="copy">复制播放列表地址</button>
@@ -212,7 +236,7 @@ export function renderHomePage() {
     <section class="channels" id="channels"></section>
   </main>
   <script>
-    const state = { channels: [], status: null, sources: [] };
+    const state = { channels: [], status: null, sources: [], categories: [] };
     const $ = (id) => document.getElementById(id);
 
     function escapeHtml(value) {
@@ -274,11 +298,36 @@ export function renderHomePage() {
       });
     }
 
+    function renderCategories() {
+      const rows = state.categories.length ? state.categories : ["推荐频道"];
+      $("categories").innerHTML = rows.map((category, index) =>
+        "<div class='category-row' data-index='" + index + "'>" +
+        "<input class='category-name' value='" + escapeHtml(category) + "' " + (index === 0 ? "readonly" : "") + ">" +
+        "<span class='muted'>" + (index === 0 ? "默认打开" : "自定义分类") + "</span>" +
+        "<button class='danger remove-category' data-index='" + index + "' " + (index === 0 ? "disabled" : "") + ">删除</button>" +
+        "</div>"
+      ).join("");
+      document.querySelectorAll(".remove-category").forEach((button) => {
+        button.addEventListener("click", () => {
+          syncCategoriesFromInputs();
+          state.categories.splice(Number(button.dataset.index), 1);
+          renderCategories();
+          renderChannels();
+        });
+      });
+    }
+
     function syncSourcesFromInputs() {
       state.sources = Array.from(document.querySelectorAll(".source-row")).map((row) => ({
         name: row.querySelector(".source-name").value.trim(),
         url: row.querySelector(".source-url").value.trim()
       }));
+    }
+
+    function syncCategoriesFromInputs() {
+      state.categories = Array.from(document.querySelectorAll(".category-row"))
+        .map((row) => row.querySelector(".category-name").value.trim())
+        .filter(Boolean);
     }
 
     function renderChannels() {
@@ -293,8 +342,11 @@ export function renderHomePage() {
         "<span class='channel-actions'>" +
         "<label class='sort-control'>序号<input class='sort-order' type='number' min='1' step='1' placeholder='留空' data-id='" + escapeHtml(channel.id) + "' value='" +
         (Number.isFinite(channel.sortOrder) ? escapeHtml(channel.sortOrder) : "") + "'></label>" +
-        "<label class='sort-control'>分组<input class='custom-group' type='text' placeholder='留空' data-id='" + escapeHtml(channel.id) + "' value='" +
-        escapeHtml(channel.customGroup || "") + "'></label>" +
+        "<label class='sort-control'>分类<select class='category-select' multiple data-id='" + escapeHtml(channel.id) + "'>" +
+        state.categories.map((category) => {
+          const selected = (channel.customGroups || []).includes(category) ? " selected" : "";
+          return "<option value='" + escapeHtml(category) + "'" + selected + ">" + escapeHtml(category) + "</option>";
+        }).join("") + "</select></label>" +
         "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='top'>置顶</button>" +
         "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='up'>上移</button>" +
         "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='down'>下移</button>" +
@@ -306,6 +358,7 @@ export function renderHomePage() {
           "<a href='/play/" + encodeURIComponent(channel.id) + "?source=" + source.sourceIndex + "'>线路 " +
           (source.sourceIndex + 1) + " - " + escapeHtml(source.sourceName) + "</a><span>" + escapeHtml(source.url) + "</span>" +
           "<span class='line-actions'>" +
+          "<a class='linklike' href='/player/" + encodeURIComponent(channel.id) + "?source=" + source.sourceIndex + "' target='_blank' rel='noopener'>测试播放</a>" +
           (source.preferred ? "<span class='badge'>默认</span>" : "<button class='linklike prefer-source' data-id='" + escapeHtml(channel.id) + "' data-url='" + escapeHtml(source.url) + "'>设为默认</button>") +
           "<button class='" + (source.disabled ? "secondary" : "danger") + " toggle-source' data-id='" + escapeHtml(channel.id) + "' data-url='" + escapeHtml(source.url) + "' data-disabled='" + (!source.disabled) + "'>" +
           (source.disabled ? "启用" : "禁用") + "</button>" +
@@ -338,19 +391,13 @@ export function renderHomePage() {
           });
         });
       });
-      document.querySelectorAll(".custom-group").forEach((input) => {
-        input.addEventListener("click", (event) => event.stopPropagation());
-        input.addEventListener("keydown", async (event) => {
-          event.stopPropagation();
-          if (event.key === "Enter") {
-            event.preventDefault();
-            input.blur();
-          }
-        });
-        input.addEventListener("change", async (event) => {
+      document.querySelectorAll(".category-select").forEach((select) => {
+        select.addEventListener("click", (event) => event.stopPropagation());
+        select.addEventListener("change", async (event) => {
           event.preventDefault();
-          await postJson("/api/channels/" + encodeURIComponent(input.dataset.id) + "/override", {
-            customGroup: input.value.trim()
+          const customGroups = Array.from(select.selectedOptions).map((option) => option.value);
+          await postJson("/api/channels/" + encodeURIComponent(select.dataset.id) + "/override", {
+            customGroups
           });
         });
       });
@@ -388,16 +435,19 @@ export function renderHomePage() {
     }
 
     async function load() {
-      const [status, channels, sources] = await Promise.all([
+      const [status, channels, sources, categories] = await Promise.all([
         fetch("/api/status").then((response) => response.json()),
         fetch("/api/channels").then((response) => response.json()),
-        fetch("/api/sources").then((response) => response.json())
+        fetch("/api/sources").then((response) => response.json()),
+        fetch("/api/categories").then((response) => response.json())
       ]);
       state.status = status;
       state.channels = channels;
       state.sources = sources;
+      state.categories = categories;
       renderStatus();
       renderSources();
+      renderCategories();
       renderChannels();
     }
 
@@ -406,6 +456,33 @@ export function renderHomePage() {
       syncSourcesFromInputs();
       state.sources.push({ name: "", url: "" });
       renderSources();
+    });
+    $("add-category").addEventListener("click", () => {
+      syncCategoriesFromInputs();
+      state.categories.push("");
+      renderCategories();
+    });
+    $("save-categories").addEventListener("click", async () => {
+      syncCategoriesFromInputs();
+      $("save-categories").disabled = true;
+      $("category-message").textContent = "保存中...";
+      const response = await fetch("/api/categories", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ categories: state.categories })
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        $("category-message").textContent = result.error || "保存失败";
+        $("save-categories").disabled = false;
+        return;
+      }
+      state.categories = result.categories;
+      state.channels = result.channels || state.channels;
+      $("category-message").textContent = "已保存";
+      renderCategories();
+      renderChannels();
+      $("save-categories").disabled = false;
     });
     $("save-sources").addEventListener("click", async () => {
       syncSourcesFromInputs();
@@ -440,6 +517,81 @@ export function renderHomePage() {
       $("refresh").disabled = false;
     });
     load();
+  </script>
+</body>
+</html>`;
+}
+
+export function renderPlayerPage({ channel, source, playUrl }) {
+  const channelName = escapeHtmlValue(channel?.name || "");
+  const sourceName = escapeHtmlValue(source?.sourceName || "线路");
+  const rawUrl = String(source?.url || "");
+  const escapedRawUrl = escapeHtmlValue(rawUrl);
+  const escapedPlayUrl = escapeHtmlValue(playUrl);
+  const lowerUrl = rawUrl.toLowerCase();
+  const likelyUnsupported = lowerUrl.startsWith("rtsp://") ||
+    lowerUrl.startsWith("rtp://") ||
+    lowerUrl.startsWith("udp://") ||
+    /\/(rtp|udp)\//i.test(rawUrl);
+
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${channelName} - 测试播放</title>
+  <style>
+    :root { color-scheme: dark; --bg: #111827; --panel: #1f2937; --text: #f9fafb; --muted: #a7b0c0; --line: #374151; --accent: #2dd4bf; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { display: grid; gap: 14px; padding: 20px; max-width: 1100px; margin: 0 auto; }
+    video { width: 100%; aspect-ratio: 16 / 9; background: #020617; border: 1px solid var(--line); border-radius: 8px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; overflow-wrap: anywhere; }
+    .muted { color: var(--muted); }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="panel">
+      <h1>${channelName}</h1>
+      <div class="muted">${sourceName}</div>
+      <div>原始地址：<a href="${escapedRawUrl}">${escapedRawUrl}</a></div>
+    </section>
+    <video id="player" controls autoplay playsinline></video>
+    <section class="panel" id="message">${likelyUnsupported ? "该线路可能不是浏览器原生支持的格式，请优先用电视端验证。" : "正在准备播放..."}</section>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <script>
+    const playUrl = ${JSON.stringify(playUrl)};
+    const rawUrl = ${JSON.stringify(rawUrl)};
+    const video = document.getElementById("player");
+    const message = document.getElementById("message");
+    const lower = rawUrl.toLowerCase();
+    const unsupported = ${JSON.stringify(likelyUnsupported)};
+
+    function setMessage(text) {
+      message.textContent = text;
+    }
+
+    if (unsupported) {
+      setMessage("浏览器通常不能直接播放 rtp/udp/rtsp 或部分组播代理流；如无法播放，请复制原始地址到电视端测试。");
+    } else if (lower.includes(".m3u8")) {
+      if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = playUrl;
+        setMessage("使用浏览器原生 HLS 播放。");
+      } else if (window.Hls && Hls.isSupported()) {
+        const hls = new Hls();
+        hls.loadSource(playUrl);
+        hls.attachMedia(video);
+        setMessage("使用 hls.js 播放。");
+      } else {
+        setMessage("当前浏览器不支持 HLS 播放。");
+      }
+    } else {
+      video.src = playUrl;
+      setMessage("使用浏览器原生播放器尝试播放。");
+    }
   </script>
 </body>
 </html>`;

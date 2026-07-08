@@ -259,17 +259,18 @@ http://b.example/cctv1.m3u8
           preferredSourceUrl: "http://b.example/cctv1.m3u8",
           disabledSourceUrls: ["http://a.example/cctv1.m3u8"],
           sortOrder: null,
-          customGroup: ""
+          customGroups: []
         },
         cctv2: {
           hidden: true,
           preferredSourceUrl: "",
           disabledSourceUrls: [],
           sortOrder: null,
-          customGroup: ""
+          customGroups: []
         }
       },
-      order: ["cctv2", "cctv1"]
+      order: ["cctv2", "cctv1"],
+      categories: ["推荐频道"]
     });
   });
 
@@ -311,26 +312,26 @@ http://a.example/cctv4.m3u8
         preferredSourceUrl: "",
         disabledSourceUrls: [],
         sortOrder: 2,
-        customGroup: ""
+        customGroups: []
       },
       cctv2: {
         hidden: true,
         preferredSourceUrl: "",
         disabledSourceUrls: [],
         sortOrder: 1,
-        customGroup: ""
+        customGroups: []
       },
       cctv3: {
         hidden: false,
         preferredSourceUrl: "",
         disabledSourceUrls: [],
         sortOrder: 2,
-        customGroup: ""
+        customGroups: []
       }
     });
   });
 
-  test("saves custom channel groups in overrides", async () => {
+  test("saves multiple custom channel groups in overrides", async () => {
     const { configPath, cachePath, overridesPath } = await createTempConfig([
       { name: "Source A", url: "http://source-a.example/list.m3u" }
     ]);
@@ -345,12 +346,12 @@ http://a.example/cctv1.m3u8
     const store = createStore({ configPath, cachePath, overridesPath, fetchImpl: fetchMock });
     await store.load();
     await store.refresh();
-    await store.saveChannelOverride("cctv1", { customGroup: "央视频道" });
+    await store.saveChannelOverride("cctv1", { customGroups: ["推荐频道", "央视频道"] });
 
     expect(store.getChannel("cctv1")).toEqual(
       expect.objectContaining({
         group: "Source Group",
-        customGroup: "央视频道"
+        customGroups: ["推荐频道", "央视频道"]
       })
     );
     expect(JSON.parse(await fs.readFile(overridesPath, "utf8")).channels.cctv1).toEqual({
@@ -358,7 +359,25 @@ http://a.example/cctv1.m3u8
       preferredSourceUrl: "",
       disabledSourceUrls: [],
       sortOrder: null,
-      customGroup: "央视频道"
+      customGroups: ["推荐频道", "央视频道"]
     });
+  });
+
+  test("saves category list with recommended first", async () => {
+    const { configPath, cachePath, overridesPath } = await createTempConfig([]);
+    const store = createStore({ configPath, cachePath, overridesPath, fetchImpl: jest.fn() });
+    await store.load();
+
+    await expect(store.saveCategories(["卫视频道", "推荐频道", "央视频道", "卫视频道"])).resolves.toEqual([
+      "推荐频道",
+      "卫视频道",
+      "央视频道"
+    ]);
+    expect(store.getCategories()).toEqual(["推荐频道", "卫视频道", "央视频道"]);
+    expect(JSON.parse(await fs.readFile(overridesPath, "utf8")).categories).toEqual([
+      "推荐频道",
+      "卫视频道",
+      "央视频道"
+    ]);
   });
 });

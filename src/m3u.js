@@ -34,6 +34,15 @@ function buildPlayUrls(channel, baseUrl) {
   );
 }
 
+function getChannelGroups(channel) {
+  if (Array.isArray(channel.customGroups)) {
+    return channel.customGroups.map((group) => escapeLiveValue(group)).filter(Boolean);
+  }
+
+  const legacyGroup = escapeLiveValue(channel.customGroup);
+  return legacyGroup ? [legacyGroup] : [];
+}
+
 export function parseM3u(text, sourceName) {
   const lines = String(text || "").split(/\r?\n/);
   const entries = [];
@@ -130,27 +139,22 @@ export function generateSourcePlaylist(channels, baseUrl) {
   return `${lines.join("\n")}\n`;
 }
 
-export function generateLiveTxt(channels, baseUrl) {
+export function generateLiveTxt(channels, baseUrl, categories = ["推荐频道"]) {
   const cleanBaseUrl = String(baseUrl || "").replace(/\/$/, "");
-  const lines = ["全部频道,#genre#"];
-  const customGroups = new Map();
+  const normalizedCategories = Array.from(new Set(["推荐频道", ...categories].map((category) => escapeLiveValue(category)).filter(Boolean)));
+  const lines = [];
 
-  for (const channel of channels) {
-    const joinedUrls = buildPlayUrls(channel, cleanBaseUrl).join("#");
-    const channelLine = `${escapeLiveValue(channel.name)},${joinedUrls}`;
-    lines.push(channelLine);
+  for (const category of normalizedCategories) {
+    const channelLines = channels
+      .filter((channel) => getChannelGroups(channel).includes(category))
+      .map((channel) => {
+        const joinedUrls = buildPlayUrls(channel, cleanBaseUrl).join("#");
+        return `${escapeLiveValue(channel.name)},${joinedUrls}`;
+      });
 
-    const customGroup = escapeLiveValue(channel.customGroup);
-    if (customGroup && customGroup !== "全部频道") {
-      if (!customGroups.has(customGroup)) {
-        customGroups.set(customGroup, []);
-      }
-      customGroups.get(customGroup).push(channelLine);
+    if (channelLines.length > 0) {
+      lines.push(`${category},#genre#`, ...channelLines);
     }
-  }
-
-  for (const [groupName, channelLines] of customGroups.entries()) {
-    lines.push(`${groupName},#genre#`, ...channelLines);
   }
 
   return `${lines.join("\n")}\n`;
@@ -166,7 +170,7 @@ export function generateLiveM3u(channels, baseUrl) {
     const attrs = [
       `tvg-name="${escapeAttribute(channelName)}"`,
       `tvg-logo="${escapeAttribute(logo)}"`,
-      `group-title="${escapeAttribute(channel.customGroup || "")}"`
+      `group-title="${escapeAttribute(getChannelGroups(channel)[0] || "")}"`
     ];
 
     lines.push(`#EXTINF:-1 ${attrs.join(" ")},${channelName}`);

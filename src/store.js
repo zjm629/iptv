@@ -33,7 +33,8 @@ function createInitialStatus() {
 function createInitialOverrides() {
   return {
     channels: {},
-    order: []
+    order: [],
+    categories: ["推荐频道"]
   };
 }
 
@@ -41,6 +42,11 @@ function normalizeOverride(value = {}) {
   const parsedSortOrder = value.sortOrder === "" || value.sortOrder === null || value.sortOrder === undefined
     ? null
     : Number(value.sortOrder);
+  const customGroups = Array.isArray(value.customGroups)
+    ? value.customGroups
+    : value.customGroup
+      ? [value.customGroup]
+      : [];
 
   return {
     hidden: Boolean(value.hidden),
@@ -49,8 +55,22 @@ function normalizeOverride(value = {}) {
       ? Array.from(new Set(value.disabledSourceUrls.map((url) => String(url || "").trim()).filter(Boolean)))
       : [],
     sortOrder: Number.isFinite(parsedSortOrder) ? parsedSortOrder : null,
-    customGroup: String(value.customGroup || "").trim()
+    customGroups: Array.from(new Set(customGroups.map((group) => String(group || "").trim()).filter(Boolean)))
   };
+}
+
+function normalizeCategories(value) {
+  const names = Array.isArray(value) ? value : [];
+  const normalized = ["推荐频道"];
+
+  for (const name of names) {
+    const category = String(name || "").trim();
+    if (category && !normalized.includes(category)) {
+      normalized.push(category);
+    }
+  }
+
+  return normalized;
 }
 
 function normalizeOverrides(value) {
@@ -66,6 +86,8 @@ function normalizeOverrides(value) {
   if (Array.isArray(value?.order)) {
     normalized.order = Array.from(new Set(value.order.map((id) => String(id || "").trim()).filter(Boolean)));
   }
+
+  normalized.categories = normalizeCategories(value?.categories);
 
   return normalized;
 }
@@ -198,7 +220,7 @@ export function createStore(options = {}) {
       ...channel,
       hidden: override.hidden,
       sortOrder: override.sortOrder,
-      customGroup: override.customGroup,
+      customGroups: override.customGroups,
       defaultSourceIndex: decoratedSources.find((source) => source.preferred && !source.disabled)?.sourceIndex ?? 0,
       sources: decoratedSources
     };
@@ -310,6 +332,14 @@ export function createStore(options = {}) {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, `${JSON.stringify(normalizedSources, null, 2)}\n`, "utf8");
       return normalizedSources;
+    },
+    getCategories() {
+      return normalizeCategories(overrides.categories);
+    },
+    async saveCategories(categories) {
+      overrides.categories = normalizeCategories(categories);
+      await persistOverrides();
+      return overrides.categories;
     },
     async saveChannelOverride(id, override) {
       const channelId = String(id || "").trim();

@@ -88,7 +88,7 @@ describe("m3u generation", () => {
         name: "CCTV1",
         logo: "",
         group: "CCTV",
-        customGroup: "CCTV",
+        customGroups: ["CCTV"],
         sources: [
           { sourceIndex: 3, url: "http://a.example/cctv1.m3u8" },
           { sourceIndex: 5, url: "http://b.example/cctv1.m3u8" }
@@ -108,27 +108,22 @@ describe("m3u generation", () => {
     expect(playlist).not.toContain("#genre#");
   });
 
-  test("generates live txt with all channels first and then custom groups", () => {
+  test("generates live txt by configured categories with recommended first", () => {
     const channels = [
-      { id: "gansu", name: "Gansu", group: "Source A", customGroup: "West", sources: [{}] },
-      { id: "qinghai", name: "Qinghai", group: "Source B", customGroup: "", sources: [{}] },
-      { id: "xinjiang", name: "Xinjiang", group: "Source A", customGroup: "West", sources: [{}] },
-      { id: "cctv1", name: "CCTV1", group: "Source C", customGroup: "CCTV", sources: [{}] }
+      { id: "cctv1", name: "CCTV1", group: "Source A", customGroups: ["推荐频道", "央视频道"], sources: [{}] },
+      { id: "hunan", name: "Hunan", group: "Source B", customGroups: ["卫视频道"], sources: [{}] },
+      { id: "movie", name: "Movie", group: "Source C", customGroups: [], sources: [{}] }
     ];
 
-    const playlist = generateLiveTxt(channels, "http://vps.example:3080");
+    const playlist = generateLiveTxt(channels, "http://vps.example:3080", ["推荐频道", "央视频道", "卫视频道"]);
 
     expect(playlist.trim().split("\n")).toEqual([
-      "全部频道,#genre#",
-      "Gansu,http://vps.example:3080/play/gansu?source=0",
-      "Qinghai,http://vps.example:3080/play/qinghai?source=0",
-      "Xinjiang,http://vps.example:3080/play/xinjiang?source=0",
+      "推荐频道,#genre#",
       "CCTV1,http://vps.example:3080/play/cctv1?source=0",
-      "West,#genre#",
-      "Gansu,http://vps.example:3080/play/gansu?source=0",
-      "Xinjiang,http://vps.example:3080/play/xinjiang?source=0",
-      "CCTV,#genre#",
-      "CCTV1,http://vps.example:3080/play/cctv1?source=0"
+      "央视频道,#genre#",
+      "CCTV1,http://vps.example:3080/play/cctv1?source=0",
+      "卫视频道,#genre#",
+      "Hunan,http://vps.example:3080/play/hunan?source=0"
     ]);
   });
 });

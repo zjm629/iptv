@@ -9,7 +9,7 @@ function createFakeStore() {
       name: "CCTV-1",
       logo: "https://logo.example/cctv.png",
       group: "CCTV",
-      customGroup: "央视频道",
+      customGroups: ["推荐频道", "央视频道"],
       sources: [
         { sourceName: "A", url: "http://a.example/cctv1.m3u8" },
         { sourceName: "B", url: "http://b.example/cctv1.m3u8" }
@@ -22,6 +22,8 @@ function createFakeStore() {
     getSources: jest.fn(async () => [{ name: "A", url: "http://a.example/list.m3u" }]),
     saveSources: jest.fn(async (sources) => sources),
     saveChannelOverride: jest.fn(async (_id, override) => override),
+    getCategories: jest.fn(() => ["推荐频道", "央视频道", "卫视频道"]),
+    saveCategories: jest.fn(async (categories) => ["推荐频道", ...categories.filter((category) => category !== "推荐频道")]),
     moveChannel: jest.fn(async () => ["cctv1"]),
     getChannels: () => channels,
     getOutputChannels: () => channels,
@@ -75,11 +77,12 @@ describe("server routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("text/plain");
-    expect(response.text).toContain("全部频道,#genre#");
+    expect(response.text).toContain("推荐频道,#genre#");
     expect(response.text).toContain("央视频道,#genre#");
     expect(response.text).toContain(
       "CCTV-1,http://vps.example:3080/play/cctv1?source=0#http://vps.example:3080/play/cctv1?source=1"
     );
+    expect(response.text).not.toContain("全部频道,#genre#");
     expect(response.text).not.toContain("CCTV,#genre#");
     expect(response.text).not.toContain("$[");
   });
@@ -92,7 +95,7 @@ describe("server routes", () => {
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("application/x-mpegurl");
     expect(response.text).toContain('#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"');
-    expect(response.text).toContain('#EXTINF:-1 tvg-name="CCTV-1" tvg-logo="https://logo.example/cctv.png" group-title="央视频道",CCTV-1');
+    expect(response.text).toContain('#EXTINF:-1 tvg-name="CCTV-1" tvg-logo="https://logo.example/cctv.png" group-title="推荐频道",CCTV-1');
     expect(response.text).toContain(
       "http://vps.example:3080/play/cctv1?source=0#http://vps.example:3080/play/cctv1?source=1"
     );
@@ -108,6 +111,23 @@ describe("server routes", () => {
     expect(response.status).toBe(200);
     expect(store.saveChannelOverride).toHaveBeenCalledWith("cctv1", { hidden: true });
     expect(response.body.channels[0].id).toBe("cctv1");
+  });
+
+  test("returns and saves custom categories", async () => {
+    const store = createFakeStore();
+    const app = createApp(store);
+
+    const readResponse = await request(app).get("/api/categories");
+    expect(readResponse.status).toBe(200);
+    expect(readResponse.body).toEqual(["推荐频道", "央视频道", "卫视频道"]);
+
+    const saveResponse = await request(app)
+      .put("/api/categories")
+      .send({ categories: ["卫视频道", "推荐频道"] });
+
+    expect(saveResponse.status).toBe(200);
+    expect(store.saveCategories).toHaveBeenCalledWith(["卫视频道", "推荐频道"]);
+    expect(saveResponse.body.categories).toEqual(["推荐频道", "卫视频道"]);
   });
 
   test("moves channels in the configured order", async () => {
@@ -154,6 +174,41 @@ describe("server routes", () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.location).toBe("http://b.example/cctv1.m3u8");
+  });
+
+  test("redirects playback by stable source index after source order changes", async () => {
+    const channels = [
+      {
+        id: "cctv1",
+        name: "CCTV-1",
+        sources: [
+          { sourceIndex: 1, sourceName: "B", url: "http://b.example/cctv1.m3u8" },
+          { sourceIndex: 0, sourceName: "A", url: "http://a.example/cctv1.m3u8" }
+        ]
+      }
+    ];
+    const store = {
+      ...createFakeStore(),
+      getChannel: (id) => channels.find((channel) => channel.id === id) || null
+    };
+
+    const response = await request(createApp(store)).get("/play/cctv1?source=0");
+
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe("http://a.example/cctv1.m3u8");
+  });
+
+  test("serves browser player page for a channel source", async () => {
+    const response = await request(createApp(createFakeStore()))
+      .get("/player/cctv1?source=1")
+      .set("Host", "vps.example:3080");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/html");
+    expect(response.text).toContain("CCTV-1");
+    expect(response.text).toContain("http://b.example/cctv1.m3u8");
+    expect(response.text).toContain("video");
+    expect(response.text).toContain("hls.js");
   });
 
   test("triggers manual refresh", async () => {
@@ -207,8 +262,9 @@ describe("server routes", () => {
     expect(response.text).toContain("live.m3u");
     expect(response.text).toContain("sort-order");
     expect(response.text).toContain("序号");
-    expect(response.text).toContain("custom-group");
-    expect(response.text).toContain("分组");
+    expect(response.text).toContain("category-select");
+    expect(response.text).toContain("分类");
+    expect(response.text).toContain("测试播放");
     expect(response.text).toContain("设为默认");
     expect(response.text).toContain("置顶");
     expect(response.text).toContain("上移");
