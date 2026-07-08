@@ -610,7 +610,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
       <div class="muted">${sourceName}</div>
       <div>原始地址：<a href="${escapedRawUrl}">${escapedRawUrl}</a></div>
     </section>
-    <video id="player" controls autoplay playsinline></video>
+    <video id="player" class="player-video" controls autoplay playsinline></video>
     <section class="actions">
       <button id="play-now">播放/继续</button>
       <button id="toggle-muted" class="secondary">静音</button>
@@ -638,7 +638,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
     const playUrl = ${JSON.stringify(playUrl)};
     const streamUrl = ${JSON.stringify(streamUrl || playUrl)};
     const rawUrl = ${JSON.stringify(rawUrl)};
-    const video = document.getElementById("player");
+    let video = document.getElementById("player");
     const message = document.getElementById("message");
     const playNow = document.getElementById("play-now");
     const toggleMuted = document.getElementById("toggle-muted");
@@ -652,6 +652,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
     const protocolUnsupported = ${JSON.stringify(protocolUnsupported)};
     const likelyMpegTs = ${JSON.stringify(likelyMpegTs)};
     let tsPlayer = null;
+    let diagnosticsAttached = false;
 
     function setMessage(text) {
       message.textContent = text;
@@ -683,6 +684,21 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
       statusNetwork.textContent = networkText() + " / readyState " + video.readyState;
     }
 
+    function resetVideoElement() {
+      const nextVideo = video.cloneNode(false);
+      nextVideo.id = "player";
+      nextVideo.className = "player-video";
+      nextVideo.controls = true;
+      nextVideo.autoplay = true;
+      nextVideo.playsInline = true;
+      video.replaceWith(nextVideo);
+      video = nextVideo;
+      diagnosticsAttached = false;
+      attachVideoDiagnostics("测试播放器");
+      updateStatus("已重建播放器");
+      appendLog("已重建 video 元素，清除 HTMLMediaElement.error 状态");
+    }
+
     async function tryPlay() {
       try {
         await video.play();
@@ -697,12 +713,18 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
 
     function destroyTsPlayer() {
       if (tsPlayer) {
-        tsPlayer.destroy();
+        try { tsPlayer.unload(); } catch (_error) {}
+        try { tsPlayer.detachMediaElement(); } catch (_error) {}
+        try { tsPlayer.destroy(); } catch (_error) {}
         tsPlayer = null;
       }
     }
 
     function attachVideoDiagnostics(prefix) {
+      if (diagnosticsAttached) {
+        return;
+      }
+      diagnosticsAttached = true;
       [
         "loadstart",
         "loadedmetadata",
@@ -727,6 +749,9 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
 
     function loadMpegTs() {
       destroyTsPlayer();
+      if (video.error) {
+        resetVideoElement();
+      }
       tsPlayer = mpegts.createPlayer({
         type: "mpegts",
         isLive: true,
@@ -738,6 +763,10 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
       tsPlayer.on(mpegts.Events.ERROR, (type, detail, info) => {
         setMessage("mpegts.js 错误：" + type + " / " + detail + (info ? " / " + JSON.stringify(info) : ""));
         appendLog("mpegts error: " + type + " / " + detail);
+        if (String(detail || "").includes("MediaMSEError") || video.error) {
+          appendLog("检测到 MediaMSEError，下一次重试会重建 video 元素");
+          setMessage("mpegts.js 错误：" + type + " / " + detail + "。请点“重试加载”，播放器会清理旧状态后重新连接。");
+        }
       });
       tsPlayer.on(mpegts.Events.STATISTICS_INFO, (stats) => {
         if (stats?.decodedFrames > 0) {
