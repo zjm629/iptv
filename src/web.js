@@ -591,8 +591,16 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
     main { display: grid; gap: 14px; padding: 20px; max-width: 1100px; margin: 0 auto; }
     video { width: 100%; aspect-ratio: 16 / 9; background: #020617; border: 1px solid var(--line); border-radius: 8px; }
     .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; overflow-wrap: anywhere; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+    button { min-height: 38px; border: 1px solid var(--line); border-radius: 6px; padding: 0 12px; background: var(--accent); color: #04111d; font: inherit; cursor: pointer; }
+    button.secondary { background: transparent; color: var(--text); }
+    .status-grid { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 10px; }
+    .status-item { border: 1px solid var(--line); border-radius: 6px; padding: 10px; background: rgba(255,255,255,0.03); }
+    .status-item strong { display: block; margin-bottom: 4px; font-size: 12px; color: var(--muted); }
+    .log { max-height: 160px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; white-space: pre-wrap; }
     .muted { color: var(--muted); }
     a { color: var(--accent); }
+    @media (max-width: 720px) { .status-grid { grid-template-columns: 1fr 1fr; } }
   </style>
 </head>
 <body>
@@ -603,7 +611,26 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
       <div>原始地址：<a href="${escapedRawUrl}">${escapedRawUrl}</a></div>
     </section>
     <video id="player" controls autoplay playsinline></video>
+    <section class="actions">
+      <button id="play-now">播放/继续</button>
+      <button id="toggle-muted" class="secondary">静音</button>
+      <button id="reload-stream" class="secondary">重试加载</button>
+      <a href="${escapeHtmlValue(streamUrl || playUrl)}">打开代理流</a>
+      <a href="${escapedRawUrl}">打开原始地址</a>
+    </section>
     <section class="panel" id="message">${protocolUnsupported ? "该线路协议不是浏览器可直接拉取的 HTTP/HTTPS，请优先用电视端验证。" : "正在准备播放..."}</section>
+    <section class="panel">
+      <div class="status-grid" id="player-status">
+        <div class="status-item"><strong>状态</strong><span id="status-state">准备中</span></div>
+        <div class="status-item"><strong>时间</strong><span id="status-time">0.0s</span></div>
+        <div class="status-item"><strong>缓冲</strong><span id="status-buffer">0.0s</span></div>
+        <div class="status-item"><strong>网络</strong><span id="status-network">-</span></div>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="muted">事件</div>
+      <div class="log" id="event-log"></div>
+    </section>
   </main>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <script src="https://cdn.jsdelivr.net/npm/mpegts.js@latest/dist/mpegts.min.js"></script>
@@ -613,6 +640,14 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
     const rawUrl = ${JSON.stringify(rawUrl)};
     const video = document.getElementById("player");
     const message = document.getElementById("message");
+    const playNow = document.getElementById("play-now");
+    const toggleMuted = document.getElementById("toggle-muted");
+    const reloadStream = document.getElementById("reload-stream");
+    const statusState = document.getElementById("status-state");
+    const statusTime = document.getElementById("status-time");
+    const statusBuffer = document.getElementById("status-buffer");
+    const statusNetwork = document.getElementById("status-network");
+    const eventLog = document.getElementById("event-log");
     const lower = rawUrl.toLowerCase();
     const protocolUnsupported = ${JSON.stringify(protocolUnsupported)};
     const likelyMpegTs = ${JSON.stringify(likelyMpegTs)};
@@ -622,42 +657,149 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
       message.textContent = text;
     }
 
-    window.addEventListener("beforeunload", () => {
+    function appendLog(text) {
+      const line = "[" + new Date().toLocaleTimeString() + "] " + text;
+      eventLog.textContent = [line, ...eventLog.textContent.split("\\n").filter(Boolean)].slice(0, 20).join("\\n");
+    }
+
+    function bufferedSeconds() {
+      if (!video.buffered.length) {
+        return 0;
+      }
+      const end = video.buffered.end(video.buffered.length - 1);
+      return Math.max(0, end - video.currentTime);
+    }
+
+    function networkText() {
+      return ["空闲", "加载中", "未找到源", "无后续数据"][video.networkState] || String(video.networkState);
+    }
+
+    function updateStatus(state) {
+      if (state) {
+        statusState.textContent = state;
+      }
+      statusTime.textContent = video.currentTime.toFixed(1) + "s";
+      statusBuffer.textContent = bufferedSeconds().toFixed(1) + "s";
+      statusNetwork.textContent = networkText() + " / readyState " + video.readyState;
+    }
+
+    async function tryPlay() {
+      try {
+        await video.play();
+        updateStatus("播放中");
+        appendLog("play() 成功");
+      } catch (error) {
+        setMessage("浏览器拦截了自动播放，请点击“播放/继续”。" + (error?.message ? " " + error.message : ""));
+        updateStatus("等待手动播放");
+        appendLog("play() 失败：" + (error?.message || error?.name || "未知错误"));
+      }
+    }
+
+    function destroyTsPlayer() {
       if (tsPlayer) {
         tsPlayer.destroy();
+        tsPlayer = null;
+      }
+    }
+
+    function attachVideoDiagnostics(prefix) {
+      [
+        "loadstart",
+        "loadedmetadata",
+        "canplay",
+        "playing",
+        "waiting",
+        "stalled",
+        "pause",
+        "error"
+      ].forEach((eventName) => {
+        video.addEventListener(eventName, () => {
+          appendLog("video " + eventName);
+          updateStatus(eventName);
+        });
+      });
+      video.addEventListener("playing", () => setMessage(prefix + " 正在播放。直播流时间显示 0:00 属于正常现象。"));
+      video.addEventListener("waiting", () => setMessage(prefix + " 正在缓冲..."));
+      video.addEventListener("stalled", () => setMessage(prefix + " 数据暂时中断，可能是源站卡顿或线路不可用。"));
+      video.addEventListener("pause", () => setMessage(prefix + " 已暂停，请点击“播放/继续”。"));
+      video.addEventListener("error", () => setMessage(prefix + " 播放器错误：" + (video.error?.message || video.error?.code || "未知错误")));
+    }
+
+    function loadMpegTs() {
+      destroyTsPlayer();
+      tsPlayer = mpegts.createPlayer({
+        type: "mpegts",
+        isLive: true,
+        url: streamUrl
+      }, {
+        enableStashBuffer: false,
+        lazyLoad: false
+      });
+      tsPlayer.on(mpegts.Events.ERROR, (type, detail, info) => {
+        setMessage("mpegts.js 错误：" + type + " / " + detail + (info ? " / " + JSON.stringify(info) : ""));
+        appendLog("mpegts error: " + type + " / " + detail);
+      });
+      tsPlayer.on(mpegts.Events.STATISTICS_INFO, (stats) => {
+        if (stats?.decodedFrames > 0) {
+          setMessage("使用 mpegts.js 播放中。直播流时间显示 0:00 属于正常现象。");
+        }
+        appendLog("mpegts stats: speed=" + (stats?.speed || "-") + " decoded=" + (stats?.decodedFrames || "-"));
+      });
+      tsPlayer.attachMediaElement(video);
+      tsPlayer.load();
+      tryPlay();
+      setMessage("使用 mpegts.js 播放 MPEG-TS/组播代理流。若画面停住，请点“播放/继续”或“重试加载”。");
+    }
+
+    playNow.addEventListener("click", () => tryPlay());
+    toggleMuted.addEventListener("click", () => {
+      video.muted = !video.muted;
+      toggleMuted.textContent = video.muted ? "取消静音" : "静音";
+      appendLog(video.muted ? "已静音" : "已取消静音");
+      tryPlay();
+    });
+    reloadStream.addEventListener("click", () => {
+      appendLog("手动重试加载");
+      if (likelyMpegTs && window.mpegts && mpegts.isSupported()) {
+        loadMpegTs();
+      } else {
+        video.load();
+        tryPlay();
       }
     });
+
+    window.addEventListener("beforeunload", destroyTsPlayer);
+    attachVideoDiagnostics("测试播放器");
+    setInterval(() => updateStatus(), 1000);
 
     if (protocolUnsupported) {
       setMessage("浏览器通常不能直接拉取 rtp://、udp://、rtsp://；如无法播放，请复制原始地址到电视端测试。");
     } else if (likelyMpegTs) {
       if (window.mpegts && mpegts.isSupported()) {
-        tsPlayer = mpegts.createPlayer({
-          type: "mpegts",
-          isLive: true,
-          url: streamUrl
-        });
-        tsPlayer.attachMediaElement(video);
-        tsPlayer.load();
-        tsPlayer.play().catch(() => {});
-        setMessage("使用 mpegts.js 播放 MPEG-TS/组播代理流。");
+        loadMpegTs();
       } else {
         setMessage("当前浏览器不支持 mpegts.js 所需的 Media Source Extensions。");
       }
     } else if (lower.includes(".m3u8")) {
       if (video.canPlayType("application/vnd.apple.mpegurl")) {
         video.src = playUrl;
+        tryPlay();
         setMessage("使用浏览器原生 HLS 播放。");
       } else if (window.Hls && Hls.isSupported()) {
         const hls = new Hls();
         hls.loadSource(playUrl);
         hls.attachMedia(video);
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          setMessage("hls.js 错误：" + data.type + " / " + data.details);
+        });
+        tryPlay();
         setMessage("使用 hls.js 播放。");
       } else {
         setMessage("当前浏览器不支持 HLS 播放。");
       }
     } else {
       video.src = playUrl;
+      tryPlay();
       setMessage("使用浏览器原生播放器尝试播放。");
     }
   </script>

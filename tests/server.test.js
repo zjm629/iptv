@@ -229,6 +229,10 @@ describe("server routes", () => {
     expect(response.status).toBe(200);
     expect(response.text).toContain("mpegts.js");
     expect(response.text).toContain("/stream/sc?source=0");
+    expect(response.text).toContain('type: "mpegts"');
+    expect(response.text).toContain("mpegts.Events.ERROR");
+    expect(response.text).toContain("player-status");
+    expect(response.text).toContain("toggle-muted");
     expect(response.text).toContain("使用 mpegts.js");
   });
 

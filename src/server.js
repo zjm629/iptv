@@ -210,8 +210,12 @@ export function createApp(store) {
       }
 
       const controller = new AbortController();
-      req.on("close", () => controller.abort());
+      res.on("close", () => controller.abort());
       const upstream = await fetch(source.url, {
+        headers: {
+          "user-agent": "Mozilla/5.0 IPTV-M3U-Manager/1.0",
+          "accept": "*/*"
+        },
         redirect: "follow",
         signal: controller.signal
       });
