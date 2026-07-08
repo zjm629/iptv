@@ -258,13 +258,15 @@ http://b.example/cctv1.m3u8
           hidden: false,
           preferredSourceUrl: "http://b.example/cctv1.m3u8",
           disabledSourceUrls: ["http://a.example/cctv1.m3u8"],
-          sortOrder: null
+          sortOrder: null,
+          customGroup: ""
         },
         cctv2: {
           hidden: true,
           preferredSourceUrl: "",
           disabledSourceUrls: [],
-          sortOrder: null
+          sortOrder: null,
+          customGroup: ""
         }
       },
       order: ["cctv2", "cctv1"]
@@ -308,20 +310,55 @@ http://a.example/cctv4.m3u8
         hidden: false,
         preferredSourceUrl: "",
         disabledSourceUrls: [],
-        sortOrder: 2
+        sortOrder: 2,
+        customGroup: ""
       },
       cctv2: {
         hidden: true,
         preferredSourceUrl: "",
         disabledSourceUrls: [],
-        sortOrder: 1
+        sortOrder: 1,
+        customGroup: ""
       },
       cctv3: {
         hidden: false,
         preferredSourceUrl: "",
         disabledSourceUrls: [],
-        sortOrder: 2
+        sortOrder: 2,
+        customGroup: ""
       }
+    });
+  });
+
+  test("saves custom channel groups in overrides", async () => {
+    const { configPath, cachePath, overridesPath } = await createTempConfig([
+      { name: "Source A", url: "http://source-a.example/list.m3u" }
+    ]);
+    const fetchMock = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      text: async () => `#EXTM3U
+#EXTINF:-1 group-title="Source Group",CCTV-1
+http://a.example/cctv1.m3u8
+`
+    });
+
+    const store = createStore({ configPath, cachePath, overridesPath, fetchImpl: fetchMock });
+    await store.load();
+    await store.refresh();
+    await store.saveChannelOverride("cctv1", { customGroup: "央视频道" });
+
+    expect(store.getChannel("cctv1")).toEqual(
+      expect.objectContaining({
+        group: "Source Group",
+        customGroup: "央视频道"
+      })
+    );
+    expect(JSON.parse(await fs.readFile(overridesPath, "utf8")).channels.cctv1).toEqual({
+      hidden: false,
+      preferredSourceUrl: "",
+      disabledSourceUrls: [],
+      sortOrder: null,
+      customGroup: "央视频道"
     });
   });
 });

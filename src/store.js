@@ -48,7 +48,8 @@ function normalizeOverride(value = {}) {
     disabledSourceUrls: Array.isArray(value.disabledSourceUrls)
       ? Array.from(new Set(value.disabledSourceUrls.map((url) => String(url || "").trim()).filter(Boolean)))
       : [],
-    sortOrder: Number.isFinite(parsedSortOrder) ? parsedSortOrder : null
+    sortOrder: Number.isFinite(parsedSortOrder) ? parsedSortOrder : null,
+    customGroup: String(value.customGroup || "").trim()
   };
 }
 
@@ -197,6 +198,7 @@ export function createStore(options = {}) {
       ...channel,
       hidden: override.hidden,
       sortOrder: override.sortOrder,
+      customGroup: override.customGroup,
       defaultSourceIndex: decoratedSources.find((source) => source.preferred && !source.disabled)?.sourceIndex ?? 0,
       sources: decoratedSources
     };

@@ -137,6 +137,11 @@ export function renderHomePage() {
       min-height: 32px;
       padding: 0 8px;
     }
+    .custom-group {
+      width: 130px;
+      min-height: 32px;
+      padding: 0 8px;
+    }
     .lines {
       margin-top: 12px;
       display: grid;
@@ -288,6 +293,8 @@ export function renderHomePage() {
         "<span class='channel-actions'>" +
         "<label class='sort-control'>序号<input class='sort-order' type='number' min='1' step='1' placeholder='留空' data-id='" + escapeHtml(channel.id) + "' value='" +
         (Number.isFinite(channel.sortOrder) ? escapeHtml(channel.sortOrder) : "") + "'></label>" +
+        "<label class='sort-control'>分组<input class='custom-group' type='text' placeholder='留空' data-id='" + escapeHtml(channel.id) + "' value='" +
+        escapeHtml(channel.customGroup || "") + "'></label>" +
         "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='top'>置顶</button>" +
         "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='up'>上移</button>" +
         "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='down'>下移</button>" +
@@ -328,6 +335,22 @@ export function renderHomePage() {
           const value = input.value.trim();
           await postJson("/api/channels/" + encodeURIComponent(input.dataset.id) + "/override", {
             sortOrder: value === "" ? null : Number(value)
+          });
+        });
+      });
+      document.querySelectorAll(".custom-group").forEach((input) => {
+        input.addEventListener("click", (event) => event.stopPropagation());
+        input.addEventListener("keydown", async (event) => {
+          event.stopPropagation();
+          if (event.key === "Enter") {
+            event.preventDefault();
+            input.blur();
+          }
+        });
+        input.addEventListener("change", async (event) => {
+          event.preventDefault();
+          await postJson("/api/channels/" + encodeURIComponent(input.dataset.id) + "/override", {
+            customGroup: input.value.trim()
           });
         });
       });

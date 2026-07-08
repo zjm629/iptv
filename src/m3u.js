@@ -132,18 +132,25 @@ export function generateSourcePlaylist(channels, baseUrl) {
 
 export function generateLiveTxt(channels, baseUrl) {
   const cleanBaseUrl = String(baseUrl || "").replace(/\/$/, "");
-  const lines = [];
-  let currentGroup = null;
+  const lines = ["全部频道,#genre#"];
+  const customGroups = new Map();
 
   for (const channel of channels) {
-    const groupName = escapeLiveValue(channel.group || "IPTV");
-    if (groupName !== currentGroup) {
-      lines.push(`${groupName},#genre#`);
-      currentGroup = groupName;
-    }
-
     const joinedUrls = buildPlayUrls(channel, cleanBaseUrl).join("#");
-    lines.push(`${escapeLiveValue(channel.name)},${joinedUrls}`);
+    const channelLine = `${escapeLiveValue(channel.name)},${joinedUrls}`;
+    lines.push(channelLine);
+
+    const customGroup = escapeLiveValue(channel.customGroup);
+    if (customGroup && customGroup !== "全部频道") {
+      if (!customGroups.has(customGroup)) {
+        customGroups.set(customGroup, []);
+      }
+      customGroups.get(customGroup).push(channelLine);
+    }
+  }
+
+  for (const [groupName, channelLines] of customGroups.entries()) {
+    lines.push(`${groupName},#genre#`, ...channelLines);
   }
 
   return `${lines.join("\n")}\n`;
@@ -159,7 +166,7 @@ export function generateLiveM3u(channels, baseUrl) {
     const attrs = [
       `tvg-name="${escapeAttribute(channelName)}"`,
       `tvg-logo="${escapeAttribute(logo)}"`,
-      `group-title="${escapeAttribute(channel.group || "")}"`
+      `group-title="${escapeAttribute(channel.customGroup || "")}"`
     ];
 
     lines.push(`#EXTINF:-1 ${attrs.join(" ")},${channelName}`);

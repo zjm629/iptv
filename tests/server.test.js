@@ -9,6 +9,7 @@ function createFakeStore() {
       name: "CCTV-1",
       logo: "https://logo.example/cctv.png",
       group: "CCTV",
+      customGroup: "央视频道",
       sources: [
         { sourceName: "A", url: "http://a.example/cctv1.m3u8" },
         { sourceName: "B", url: "http://b.example/cctv1.m3u8" }
@@ -74,10 +75,12 @@ describe("server routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("text/plain");
-    expect(response.text).toContain("CCTV,#genre#");
+    expect(response.text).toContain("全部频道,#genre#");
+    expect(response.text).toContain("央视频道,#genre#");
     expect(response.text).toContain(
       "CCTV-1,http://vps.example:3080/play/cctv1?source=0#http://vps.example:3080/play/cctv1?source=1"
     );
+    expect(response.text).not.toContain("CCTV,#genre#");
     expect(response.text).not.toContain("$[");
   });
 
@@ -89,7 +92,7 @@ describe("server routes", () => {
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("application/x-mpegurl");
     expect(response.text).toContain('#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"');
-    expect(response.text).toContain('#EXTINF:-1 tvg-name="CCTV-1" tvg-logo="https://logo.example/cctv.png" group-title="CCTV",CCTV-1');
+    expect(response.text).toContain('#EXTINF:-1 tvg-name="CCTV-1" tvg-logo="https://logo.example/cctv.png" group-title="央视频道",CCTV-1');
     expect(response.text).toContain(
       "http://vps.example:3080/play/cctv1?source=0#http://vps.example:3080/play/cctv1?source=1"
     );
@@ -204,6 +207,8 @@ describe("server routes", () => {
     expect(response.text).toContain("live.m3u");
     expect(response.text).toContain("sort-order");
     expect(response.text).toContain("序号");
+    expect(response.text).toContain("custom-group");
+    expect(response.text).toContain("分组");
     expect(response.text).toContain("设为默认");
     expect(response.text).toContain("置顶");
     expect(response.text).toContain("上移");

@@ -88,6 +88,7 @@ describe("m3u generation", () => {
         name: "CCTV1",
         logo: "",
         group: "CCTV",
+        customGroup: "CCTV",
         sources: [
           { sourceIndex: 3, url: "http://a.example/cctv1.m3u8" },
           { sourceIndex: 5, url: "http://b.example/cctv1.m3u8" }
@@ -107,22 +108,27 @@ describe("m3u generation", () => {
     expect(playlist).not.toContain("#genre#");
   });
 
-  test("generates live txt in the configured channel order across groups", () => {
+  test("generates live txt with all channels first and then custom groups", () => {
     const channels = [
-      { id: "gansu", name: "Gansu", group: "Group A", sources: [{}] },
-      { id: "qinghai", name: "Qinghai", group: "Group B", sources: [{}] },
-      { id: "xinjiang", name: "Xinjiang", group: "Group A", sources: [{}] }
+      { id: "gansu", name: "Gansu", group: "Source A", customGroup: "West", sources: [{}] },
+      { id: "qinghai", name: "Qinghai", group: "Source B", customGroup: "", sources: [{}] },
+      { id: "xinjiang", name: "Xinjiang", group: "Source A", customGroup: "West", sources: [{}] },
+      { id: "cctv1", name: "CCTV1", group: "Source C", customGroup: "CCTV", sources: [{}] }
     ];
 
     const playlist = generateLiveTxt(channels, "http://vps.example:3080");
 
     expect(playlist.trim().split("\n")).toEqual([
-      "Group A,#genre#",
+      "全部频道,#genre#",
       "Gansu,http://vps.example:3080/play/gansu?source=0",
-      "Group B,#genre#",
       "Qinghai,http://vps.example:3080/play/qinghai?source=0",
-      "Group A,#genre#",
-      "Xinjiang,http://vps.example:3080/play/xinjiang?source=0"
+      "Xinjiang,http://vps.example:3080/play/xinjiang?source=0",
+      "CCTV1,http://vps.example:3080/play/cctv1?source=0",
+      "West,#genre#",
+      "Gansu,http://vps.example:3080/play/gansu?source=0",
+      "Xinjiang,http://vps.example:3080/play/xinjiang?source=0",
+      "CCTV,#genre#",
+      "CCTV1,http://vps.example:3080/play/cctv1?source=0"
     ]);
   });
 });
