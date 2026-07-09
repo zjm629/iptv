@@ -2,6 +2,8 @@ FROM node:22-alpine
 
 WORKDIR /app
 
+RUN apk add --no-cache ffmpeg
+
 RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --prod --frozen-lockfile

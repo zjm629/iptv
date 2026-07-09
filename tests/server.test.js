@@ -1,5 +1,9 @@
 import request from "supertest";
 import http from "node:http";
+import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { jest } from "@jest/globals";
 import { createApp } from "../src/server.js";
 
@@ -212,7 +216,7 @@ describe("server routes", () => {
     expect(response.text).toContain("hls.js");
   });
 
-  test("serves mpeg-ts player support for http rtp proxy streams", async () => {
+  test("serves ffmpeg hls player support for http rtp proxy streams", async () => {
     const store = createFakeStore([
       {
         id: "sc",
@@ -228,18 +232,15 @@ describe("server routes", () => {
       .set("Host", "vps.example:3080");
 
     expect(response.status).toBe(200);
-    expect(response.text).toContain("mpegts.js");
     expect(response.text).toContain("/stream/sc?source=0");
-    expect(response.text).toContain('type: "mpegts"');
-    expect(response.text).toContain("mpegts.Events.ERROR");
+    expect(response.text).toContain("/hls/sc/0/index.m3u8");
+    expect(response.text).toContain("FFmpeg HLS");
     expect(response.text).toContain("player-status");
     expect(response.text).toContain("start-overlay");
     expect(response.text).toContain("点击播放");
     expect(response.text).toContain("toggle-muted");
     expect(response.text).toContain("resetVideoElement");
-    expect(response.text).toContain("MediaMSEError");
-    expect(response.text).toContain("enableWorker: true");
-    expect(response.text).toContain("stashInitialSize");
+    expect(response.text).toContain("loadHlsPreview");
     expect(response.text).toContain("使用 mpegts.js");
   });
 
@@ -269,6 +270,47 @@ describe("server routes", () => {
       expect(Buffer.from(response.body).toString("utf8")).toBe("stream-data");
     } finally {
       await new Promise((resolve) => upstream.close(resolve));
+    }
+  });
+
+  test("starts ffmpeg hls preview for stream testing", async () => {
+    const hlsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "iptv-hls-"));
+    const processMock = new EventEmitter();
+    processMock.stderr = new EventEmitter();
+    processMock.kill = jest.fn();
+    const spawnImpl = jest.fn((_command, args) => {
+      const outputPath = args.at(-1);
+      setTimeout(async () => {
+        await fs.mkdir(path.dirname(outputPath), { recursive: true });
+        await fs.writeFile(outputPath, "#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:2,\nsegment_00000.ts\n", "utf8");
+      }, 5);
+      return processMock;
+    });
+    const store = createFakeStore([
+      {
+        id: "sc",
+        name: "SCTV",
+        sources: [
+          { sourceIndex: 0, sourceName: "RTP Proxy", url: "http://example.test/rtp/239.253.43.119:5146" }
+        ]
+      }
+    ]);
+
+    try {
+      const response = await request(createApp(store, { hlsRoot, spawnImpl, hlsStartTimeoutMs: 1000 }))
+        .get("/hls/sc/0/index.m3u8");
+
+      expect(response.status).toBe(200);
+      expect(response.headers["content-type"]).toContain("application/vnd.apple.mpegurl");
+      expect(response.text).toContain("#EXTM3U");
+      expect(spawnImpl).toHaveBeenCalledWith("ffmpeg", expect.arrayContaining([
+        "-i",
+        "http://example.test/rtp/239.253.43.119:5146",
+        "-f",
+        "hls"
+      ]), expect.any(Object));
+    } finally {
+      await fs.rm(hlsRoot, { recursive: true, force: true });
     }
   });
 

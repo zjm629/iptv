@@ -564,7 +564,7 @@ export function renderHomePage() {
 </html>`;
 }
 
-export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
+export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPreviewUrl }) {
   const channelName = escapeHtmlValue(channel?.name || "");
   const sourceName = escapeHtmlValue(source?.sourceName || "线路");
   const rawUrl = String(source?.url || "");
@@ -655,6 +655,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
   <script>
     const playUrl = ${JSON.stringify(playUrl)};
     const streamUrl = ${JSON.stringify(streamUrl || playUrl)};
+    const hlsPreviewUrl = ${JSON.stringify(hlsPreviewUrl || playUrl)};
     const rawUrl = ${JSON.stringify(rawUrl)};
     let video = document.getElementById("player");
     const message = document.getElementById("message");
@@ -671,6 +672,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
     const protocolUnsupported = ${JSON.stringify(protocolUnsupported)};
     const likelyMpegTs = ${JSON.stringify(likelyMpegTs)};
     let tsPlayer = null;
+    let hlsPlayer = null;
     let diagnosticsAttached = false;
     let hasDecodedFrames = false;
 
@@ -742,6 +744,10 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
         try { tsPlayer.detachMediaElement(); } catch (_error) {}
         try { tsPlayer.destroy(); } catch (_error) {}
         tsPlayer = null;
+      }
+      if (hlsPlayer) {
+        try { hlsPlayer.destroy(); } catch (_error) {}
+        hlsPlayer = null;
       }
     }
 
@@ -817,6 +823,37 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
       setMessage("已预加载 MPEG-TS/组播代理流。请点击画面中间的“点击播放”启动有声播放。");
     }
 
+    function loadHlsPreview(url, label) {
+      destroyTsPlayer();
+      if (video.error) {
+        resetVideoElement();
+      }
+      if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = url;
+        video.load();
+        updateStartOverlay();
+        setMessage(label + " 已加载，请点击播放。");
+        return;
+      }
+      if (window.Hls && Hls.isSupported()) {
+        hlsPlayer = new Hls({
+          liveSyncDurationCount: 3,
+          maxLiveSyncPlaybackRate: 1.5,
+          enableWorker: true
+        });
+        hlsPlayer.on(Hls.Events.ERROR, (_event, data) => {
+          appendLog("hls error: " + data.type + " / " + data.details);
+          setMessage(label + " 错误：" + data.type + " / " + data.details);
+        });
+        hlsPlayer.loadSource(url);
+        hlsPlayer.attachMedia(video);
+        updateStartOverlay();
+        setMessage(label + " 正在启动，FFmpeg 需要几秒生成首个片段。请稍后点击播放。");
+        return;
+      }
+      setMessage("当前浏览器不支持 HLS 播放。");
+    }
+
     playNow.addEventListener("click", () => tryPlay());
     startOverlay.addEventListener("click", () => tryPlay());
     toggleMuted.addEventListener("click", () => {
@@ -827,8 +864,8 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
     });
     reloadStream.addEventListener("click", () => {
       appendLog("手动重试加载");
-      if (likelyMpegTs && window.mpegts && mpegts.isSupported()) {
-        loadMpegTs();
+      if (likelyMpegTs) {
+        loadHlsPreview(hlsPreviewUrl, "FFmpeg HLS 稳定预览");
       } else {
         video.load();
         updateStartOverlay();
@@ -843,11 +880,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
     if (protocolUnsupported) {
       setMessage("浏览器通常不能直接拉取 rtp://、udp://、rtsp://；如无法播放，请复制原始地址到电视端测试。");
     } else if (likelyMpegTs) {
-      if (window.mpegts && mpegts.isSupported()) {
-        loadMpegTs();
-      } else {
-        setMessage("当前浏览器不支持 mpegts.js 所需的 Media Source Extensions。");
-      }
+      loadHlsPreview(hlsPreviewUrl, "FFmpeg HLS 稳定预览");
     } else if (lower.includes(".m3u8")) {
       if (video.canPlayType("application/vnd.apple.mpegurl")) {
         video.src = playUrl;
