@@ -869,6 +869,22 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
         });
         hlsPlayer.on(Hls.Events.ERROR, (_event, data) => {
           appendLog("hls error: " + data.type + " / " + data.details + (data.response ? " / HTTP " + data.response.code : ""));
+          if (!data.fatal) {
+            setMessage(label + " 正在播放，检测到可恢复缓冲错误：" + data.details);
+            return;
+          }
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            appendLog("hls fatal media error, recoverMediaError()");
+            hlsPlayer.recoverMediaError();
+            setMessage(label + " 正在自动恢复媒体缓冲。");
+            return;
+          }
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            appendLog("hls fatal network error, startLoad()");
+            hlsPlayer.startLoad();
+            setMessage(label + " 网络加载异常，正在重新拉流。");
+            return;
+          }
           setMessage(label + " 错误：" + data.type + " / " + data.details + (data.response ? " / HTTP " + data.response.code : ""));
         });
         hlsPlayer.attachMedia(video);
@@ -930,6 +946,20 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
         hls.loadSource(playUrl);
         hls.attachMedia(video);
         hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (!data.fatal) {
+            setMessage("hls.js 正在播放，检测到可恢复缓冲错误：" + data.details);
+            return;
+          }
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            hls.recoverMediaError();
+            setMessage("hls.js 正在自动恢复媒体缓冲。");
+            return;
+          }
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            hls.startLoad();
+            setMessage("hls.js 网络加载异常，正在重新拉流。");
+            return;
+          }
           setMessage("hls.js 错误：" + data.type + " / " + data.details);
         });
         hls.on(Hls.Events.MANIFEST_PARSED, () => tryAutoplay("HLS 清单已解析"));

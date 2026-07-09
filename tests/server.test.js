@@ -245,6 +245,8 @@ describe("server routes", () => {
     expect(response.text).toContain("restart=1");
     expect(response.text).toContain("isSafariNativeHls");
     expect(response.text).toContain("Hls.Events.MANIFEST_PARSED");
+    expect(response.text).toContain("recoverMediaError");
+    expect(response.text).toContain("data.fatal");
     expect(response.text).toContain("tryAutoplay");
     expect(response.text).toContain("muted = false");
     expect(response.text).toContain("muted = true");
@@ -345,9 +347,17 @@ describe("server routes", () => {
       expect(spawnImpl).toHaveBeenCalledWith("ffmpeg", expect.arrayContaining([
         "-i",
         "http://example.test/rtp/239.253.43.119:5146",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
         "-f",
         "hls"
       ]), expect.any(Object));
+      const ffmpegArgs = spawnImpl.mock.calls[0][1];
+      expect(ffmpegArgs).not.toContain("copy");
     } finally {
       await fs.rm(hlsRoot, { recursive: true, force: true });
     }
