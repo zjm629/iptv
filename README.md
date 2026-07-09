@@ -164,7 +164,7 @@ docker compose up -d --build
 - `GET /api/status`：刷新状态和源状态。
 - `POST /api/refresh`：手动刷新。
 - `GET /player/:channelId?source=0`：网页测试播放器。
-- `GET /hls/:channelId/:sourceIndex/index.m3u8`：网页测试播放器使用的 FFmpeg HLS 预览。
+- `GET /hls/:channelId/:sourceIndex/:sourceVersion/index.m3u8`：网页测试播放器使用的 FFmpeg HLS 预览，`sourceVersion` 会随线路地址变化，避免复用旧源缓存。
 - `GET /stream/:channelId?source=0`：网页测试播放器保留的 HTTP/HTTPS 原始流代理调试入口。
 - `GET /play/:channelId?source=0`：播放指定频道线路。
 

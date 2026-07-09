@@ -233,7 +233,7 @@ describe("server routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.text).toContain("/stream/sc?source=0");
-    expect(response.text).toContain("/hls/sc/0/index.m3u8");
+    expect(response.text).toMatch(/\/hls\/sc\/0\/[^/]+\/index\.m3u8/);
     expect(response.text).toContain("FFmpeg HLS");
     expect(response.text).toContain("player-status");
     expect(response.text).toContain("start-overlay");
@@ -243,6 +243,36 @@ describe("server routes", () => {
     expect(response.text).toContain("loadHlsPreview");
     expect(response.text).toContain("isSafariNativeHls");
     expect(response.text).toContain("Hls.Events.MANIFEST_PARSED");
+    expect(response.text).toContain("tryAutoplayMuted");
+    expect(response.text).toContain("muted = true");
+  });
+
+  test("uses source url version in hls preview links", async () => {
+    const channel = {
+      id: "sc",
+      name: "SCTV",
+      sources: [
+        { sourceIndex: 0, sourceName: "A", url: "http://example.test/rtp/239.0.0.1:5146" }
+      ]
+    };
+    const storeA = createFakeStore([channel]);
+    const storeB = createFakeStore([
+      {
+        ...channel,
+        sources: [
+          { sourceIndex: 0, sourceName: "B", url: "http://example.test/rtp/239.0.0.2:5146" }
+        ]
+      }
+    ]);
+
+    const responseA = await request(createApp(storeA)).get("/player/sc?source=0").set("Host", "vps.example:3080");
+    const responseB = await request(createApp(storeB)).get("/player/sc?source=0").set("Host", "vps.example:3080");
+    const hlsA = responseA.text.match(/\/hls\/sc\/0\/[^/]+\/index\.m3u8/)?.[0];
+    const hlsB = responseB.text.match(/\/hls\/sc\/0\/[^/]+\/index\.m3u8/)?.[0];
+
+    expect(hlsA).toBeTruthy();
+    expect(hlsB).toBeTruthy();
+    expect(hlsA).not.toBe(hlsB);
   });
 
   test("proxies stream data for browser source testing", async () => {
@@ -298,8 +328,13 @@ describe("server routes", () => {
     ]);
 
     try {
-      const response = await request(createApp(store, { hlsRoot, spawnImpl, hlsStartTimeoutMs: 1000 }))
-        .get("/hls/sc/0/index.m3u8");
+      const app = createApp(store, { hlsRoot, spawnImpl, hlsStartTimeoutMs: 1000 });
+      const playerResponse = await request(app).get("/player/sc?source=0");
+      const hlsPath = playerResponse.text.match(/\/hls\/sc\/0\/[^/]+\/index\.m3u8/)?.[0];
+
+      expect(hlsPath).toBeTruthy();
+
+      const response = await request(app).get(hlsPath);
 
       expect(response.status).toBe(200);
       expect(response.headers["content-type"]).toContain("application/vnd.apple.mpegurl");

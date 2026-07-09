@@ -1,5 +1,6 @@
 import express from "express";
 import cron from "node-cron";
+import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import http from "node:http";
@@ -47,6 +48,10 @@ function findChannelSource(channel, requestedSourceIndex) {
 
 function safePathPart(value) {
   return String(value || "").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "channel";
+}
+
+function sourceUrlVersion(value) {
+  return crypto.createHash("sha1").update(String(value || "")).digest("hex").slice(0, 12);
 }
 
 async function waitForFile(filePath, timeoutMs) {
@@ -124,8 +129,8 @@ export function createApp(store, options = {}) {
   const hlsStartTimeoutMs = options.hlsStartTimeoutMs || 8000;
   const hlsSessions = new Map();
 
-  async function startHlsPreview(channel, source, sourceIndex) {
-    const sessionId = `${safePathPart(channel.id)}-${sourceIndex}`;
+  async function startHlsPreview(channel, source, sourceIndex, sourceVersion) {
+    const sessionId = `${safePathPart(channel.id)}-${sourceIndex}-${sourceVersion}`;
     const dir = path.join(hlsRoot, sessionId);
     const playlistPath = path.join(dir, "index.m3u8");
     const existing = hlsSessions.get(sessionId);
@@ -324,9 +329,10 @@ export function createApp(store, options = {}) {
     }
 
     const stableSourceIndex = source.sourceIndex ?? sourceIndex;
+    const sourceVersion = sourceUrlVersion(source.url);
     const playUrl = `${getBaseUrl(req)}/play/${encodeURIComponent(channel.id)}?source=${stableSourceIndex}`;
     const streamUrl = `${getBaseUrl(req)}/stream/${encodeURIComponent(channel.id)}?source=${stableSourceIndex}`;
-    const hlsPreviewUrl = `${getBaseUrl(req)}/hls/${encodeURIComponent(channel.id)}/${stableSourceIndex}/index.m3u8`;
+    const hlsPreviewUrl = `${getBaseUrl(req)}/hls/${encodeURIComponent(channel.id)}/${stableSourceIndex}/${sourceVersion}/index.m3u8`;
     res.type("html").send(renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPreviewUrl }));
   });
 
@@ -357,7 +363,7 @@ export function createApp(store, options = {}) {
     }
   });
 
-  app.get("/hls/:channelId/:sourceIndex/:fileName", async (req, res, next) => {
+  app.get("/hls/:channelId/:sourceIndex/:sourceVersion/:fileName", async (req, res, next) => {
     try {
       const channel = store.getChannel(req.params.channelId);
       if (!channel) {
@@ -378,7 +384,13 @@ export function createApp(store, options = {}) {
       }
 
       const stableSourceIndex = source.sourceIndex ?? requestedSourceIndex;
-      const { dir, playlistPath, sessionId } = await startHlsPreview(channel, source, stableSourceIndex);
+      const expectedSourceVersion = sourceUrlVersion(source.url);
+      if (req.params.sourceVersion !== expectedSourceVersion) {
+        res.status(404).send("HLS preview source version is no longer current.");
+        return;
+      }
+
+      const { dir, playlistPath, sessionId } = await startHlsPreview(channel, source, stableSourceIndex, expectedSourceVersion);
       const fileName = path.basename(req.params.fileName);
       const filePath = path.join(dir, fileName);
       const isPlaylist = fileName.endsWith(".m3u8");
