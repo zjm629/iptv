@@ -241,7 +241,8 @@ describe("server routes", () => {
     expect(response.text).toContain("toggle-muted");
     expect(response.text).toContain("resetVideoElement");
     expect(response.text).toContain("loadHlsPreview");
-    expect(response.text).toContain("使用 mpegts.js");
+    expect(response.text).toContain("isSafariNativeHls");
+    expect(response.text).toContain("Hls.Events.MANIFEST_PARSED");
   });
 
   test("proxies stream data for browser source testing", async () => {

@@ -378,13 +378,16 @@ export function createApp(store, options = {}) {
       }
 
       const stableSourceIndex = source.sourceIndex ?? requestedSourceIndex;
-      const { dir, playlistPath } = await startHlsPreview(channel, source, stableSourceIndex);
+      const { dir, playlistPath, sessionId } = await startHlsPreview(channel, source, stableSourceIndex);
       const fileName = path.basename(req.params.fileName);
       const filePath = path.join(dir, fileName);
       const isPlaylist = fileName.endsWith(".m3u8");
       const ready = isPlaylist ? await waitForFile(playlistPath, hlsStartTimeoutMs) : true;
       if (!ready) {
-        res.status(503).type("text").send("HLS preview is still starting. Please retry in a moment.");
+        const stderr = hlsSessions.get(sessionId)?.stderr?.trim();
+        res.status(503).type("text").send(stderr
+          ? `HLS preview did not start yet.\n\nFFmpeg output:\n${stderr}`
+          : "HLS preview is still starting. Please retry in a moment.");
         return;
       }
 

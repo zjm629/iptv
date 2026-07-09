@@ -828,27 +828,38 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
       if (video.error) {
         resetVideoElement();
       }
-      if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      const isSafariNativeHls = video.canPlayType("application/vnd.apple.mpegurl") &&
+        /^((?!chrome|android|crios|fxios|edg).)*safari/i.test(navigator.userAgent);
+      if (window.Hls && Hls.isSupported() && !isSafariNativeHls) {
+        hlsPlayer = new Hls({
+          liveSyncDurationCount: 3,
+          maxLiveSyncPlaybackRate: 1.5,
+          enableWorker: true,
+          lowLatencyMode: true
+        });
+        hlsPlayer.on(Hls.Events.MEDIA_ATTACHED, () => {
+          appendLog("hls media attached");
+          hlsPlayer.loadSource(url);
+        });
+        hlsPlayer.on(Hls.Events.MANIFEST_PARSED, () => {
+          appendLog("hls manifest parsed");
+          updateStartOverlay();
+          setMessage(label + " 已解析播放清单，请点击播放。");
+        });
+        hlsPlayer.on(Hls.Events.ERROR, (_event, data) => {
+          appendLog("hls error: " + data.type + " / " + data.details + (data.response ? " / HTTP " + data.response.code : ""));
+          setMessage(label + " 错误：" + data.type + " / " + data.details + (data.response ? " / HTTP " + data.response.code : ""));
+        });
+        hlsPlayer.attachMedia(video);
+        updateStartOverlay();
+        setMessage(label + " 正在启动，FFmpeg 需要几秒生成首个片段。请稍后点击播放。");
+        return;
+      }
+      if (isSafariNativeHls) {
         video.src = url;
         video.load();
         updateStartOverlay();
         setMessage(label + " 已加载，请点击播放。");
-        return;
-      }
-      if (window.Hls && Hls.isSupported()) {
-        hlsPlayer = new Hls({
-          liveSyncDurationCount: 3,
-          maxLiveSyncPlaybackRate: 1.5,
-          enableWorker: true
-        });
-        hlsPlayer.on(Hls.Events.ERROR, (_event, data) => {
-          appendLog("hls error: " + data.type + " / " + data.details);
-          setMessage(label + " 错误：" + data.type + " / " + data.details);
-        });
-        hlsPlayer.loadSource(url);
-        hlsPlayer.attachMedia(video);
-        updateStartOverlay();
-        setMessage(label + " 正在启动，FFmpeg 需要几秒生成首个片段。请稍后点击播放。");
         return;
       }
       setMessage("当前浏览器不支持 HLS 播放。");
