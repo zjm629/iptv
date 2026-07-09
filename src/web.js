@@ -874,6 +874,10 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
       setMessage("当前浏览器不支持 HLS 播放。");
     }
 
+    function restartPreviewUrl(url) {
+      return url + (url.includes("?") ? "&" : "?") + "restart=1&t=" + Date.now();
+    }
+
     playNow.addEventListener("click", () => tryPlay());
     startOverlay.addEventListener("click", () => tryPlay());
     toggleMuted.addEventListener("click", () => {
@@ -885,7 +889,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
     reloadStream.addEventListener("click", () => {
       appendLog("手动重试加载");
       if (likelyMpegTs) {
-        loadHlsPreview(hlsPreviewUrl, "FFmpeg HLS 稳定预览");
+        loadHlsPreview(restartPreviewUrl(hlsPreviewUrl), "FFmpeg HLS 稳定预览");
       } else {
         video.load();
         updateStartOverlay();

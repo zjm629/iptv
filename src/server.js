@@ -70,6 +70,15 @@ async function waitForFile(filePath, timeoutMs) {
   return false;
 }
 
+async function isReadyFile(filePath) {
+  try {
+    const stat = await fs.stat(filePath);
+    return stat.size > 0;
+  } catch (_error) {
+    return false;
+  }
+}
+
 function proxyHttpStream(sourceUrl, res, next, redirects = 0) {
   let parsedUrl;
   try {
@@ -129,12 +138,16 @@ export function createApp(store, options = {}) {
   const hlsStartTimeoutMs = options.hlsStartTimeoutMs || 8000;
   const hlsSessions = new Map();
 
-  async function startHlsPreview(channel, source, sourceIndex, sourceVersion) {
+  async function startHlsPreview(channel, source, sourceIndex, sourceVersion, options = {}) {
     const sessionId = `${safePathPart(channel.id)}-${sourceIndex}-${sourceVersion}`;
     const dir = path.join(hlsRoot, sessionId);
     const playlistPath = path.join(dir, "index.m3u8");
     const existing = hlsSessions.get(sessionId);
     if (existing && existing.process.exitCode === null && existing.process.signalCode === null) {
+      return { dir, playlistPath, sessionId };
+    }
+
+    if (!options.forceRestart && await isReadyFile(playlistPath)) {
       return { dir, playlistPath, sessionId };
     }
 
@@ -390,10 +403,18 @@ export function createApp(store, options = {}) {
         return;
       }
 
-      const { dir, playlistPath, sessionId } = await startHlsPreview(channel, source, stableSourceIndex, expectedSourceVersion);
       const fileName = path.basename(req.params.fileName);
-      const filePath = path.join(dir, fileName);
       const isPlaylist = fileName.endsWith(".m3u8");
+      const sessionId = `${safePathPart(channel.id)}-${stableSourceIndex}-${expectedSourceVersion}`;
+      const dir = path.join(hlsRoot, sessionId);
+      const playlistPath = path.join(dir, "index.m3u8");
+      if (isPlaylist) {
+        await startHlsPreview(channel, source, stableSourceIndex, expectedSourceVersion, {
+          forceRestart: req.query.restart === "1"
+        });
+      }
+
+      const filePath = path.join(dir, fileName);
       const ready = isPlaylist ? await waitForFile(playlistPath, hlsStartTimeoutMs) : true;
       if (!ready) {
         const stderr = hlsSessions.get(sessionId)?.stderr?.trim();

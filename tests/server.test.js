@@ -241,6 +241,7 @@ describe("server routes", () => {
     expect(response.text).toContain("toggle-muted");
     expect(response.text).toContain("resetVideoElement");
     expect(response.text).toContain("loadHlsPreview");
+    expect(response.text).toContain("restart=1");
     expect(response.text).toContain("isSafariNativeHls");
     expect(response.text).toContain("Hls.Events.MANIFEST_PARSED");
     expect(response.text).toContain("tryAutoplayMuted");
@@ -345,6 +346,59 @@ describe("server routes", () => {
         "-f",
         "hls"
       ]), expect.any(Object));
+    } finally {
+      await fs.rm(hlsRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("serves cached hls playlists and segments after ffmpeg exits without restarting preview", async () => {
+    const hlsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "iptv-hls-"));
+    const processes = [];
+    const spawnImpl = jest.fn((_command, args) => {
+      const outputPath = args.at(-1);
+      const processMock = new EventEmitter();
+      processMock.stderr = new EventEmitter();
+      processMock.exitCode = null;
+      processMock.signalCode = null;
+      processMock.kill = jest.fn();
+      processes.push(processMock);
+      setTimeout(async () => {
+        const dir = path.dirname(outputPath);
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(path.join(dir, "segment_00000.ts"), "segment-data", "utf8");
+        await fs.writeFile(outputPath, "#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:2,\nsegment_00000.ts\n", "utf8");
+      }, 5);
+      return processMock;
+    });
+    const store = createFakeStore([
+      {
+        id: "sc",
+        name: "SCTV",
+        sources: [
+          { sourceIndex: 0, sourceName: "RTP Proxy", url: "http://example.test/rtp/239.253.43.119:5146" }
+        ]
+      }
+    ]);
+
+    try {
+      const app = createApp(store, { hlsRoot, spawnImpl, hlsStartTimeoutMs: 1000 });
+      const playerResponse = await request(app).get("/player/sc?source=0");
+      const hlsPath = playerResponse.text.match(/\/hls\/sc\/0\/[^/]+\/index\.m3u8/)?.[0];
+
+      expect(hlsPath).toBeTruthy();
+
+      await request(app).get(hlsPath).expect(200);
+      processes[0].exitCode = 1;
+      processes[0].emit("exit", 1);
+
+      const playlistResponse = await request(app).get(hlsPath);
+      const segmentResponse = await request(app).get(hlsPath.replace("index.m3u8", "segment_00000.ts"));
+
+      expect(playlistResponse.status).toBe(200);
+      expect(playlistResponse.text).toContain("segment_00000.ts");
+      expect(segmentResponse.status).toBe(200);
+      expect(Buffer.from(segmentResponse.body).toString("utf8")).toBe("segment-data");
+      expect(spawnImpl).toHaveBeenCalledTimes(1);
     } finally {
       await fs.rm(hlsRoot, { recursive: true, force: true });
     }
