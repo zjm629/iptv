@@ -127,7 +127,40 @@ export function createApp(store, options = {}) {
   const ffmpegPath = options.ffmpegPath || process.env.FFMPEG_PATH || "ffmpeg";
   const hlsRoot = options.hlsRoot || process.env.HLS_CACHE_DIR || path.join(os.tmpdir(), "iptv-hls-preview");
   const hlsStartTimeoutMs = options.hlsStartTimeoutMs || 8000;
+  const hlsIdleTimeoutMs = options.hlsIdleTimeoutMs ?? Number.parseInt(process.env.HLS_IDLE_TIMEOUT_MS || "30000", 10);
   const hlsSessions = new Map();
+
+  function stopHlsSession(sessionId) {
+    const session = hlsSessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+
+    if (session.cleanupTimer) {
+      clearTimeout(session.cleanupTimer);
+      session.cleanupTimer = null;
+    }
+
+    if (session.process.exitCode === null && session.process.signalCode === null) {
+      session.process.kill?.("SIGTERM");
+    }
+    hlsSessions.delete(sessionId);
+  }
+
+  function touchHlsSession(sessionId) {
+    const session = hlsSessions.get(sessionId);
+    if (!session || hlsIdleTimeoutMs <= 0) {
+      return;
+    }
+
+    if (session.cleanupTimer) {
+      clearTimeout(session.cleanupTimer);
+    }
+    session.cleanupTimer = setTimeout(() => {
+      stopHlsSession(sessionId);
+    }, hlsIdleTimeoutMs);
+    session.cleanupTimer.unref?.();
+  }
 
   async function startHlsPreview(channel, source, sourceIndex, sourceVersion, options = {}) {
     const sessionId = `${safePathPart(channel.id)}-${sourceIndex}-${sourceVersion}`;
@@ -135,10 +168,11 @@ export function createApp(store, options = {}) {
     const playlistPath = path.join(dir, "index.m3u8");
     const existing = hlsSessions.get(sessionId);
     if (!options.forceRestart && existing && existing.process.exitCode === null && existing.process.signalCode === null) {
+      touchHlsSession(sessionId);
       return { dir, playlistPath, sessionId };
     }
 
-    existing?.process.kill?.("SIGTERM");
+    stopHlsSession(sessionId);
     await fs.rm(dir, { recursive: true, force: true });
     await fs.mkdir(dir, { recursive: true });
 
@@ -197,16 +231,21 @@ export function createApp(store, options = {}) {
       playlistPath
     ];
     const ffmpeg = spawnImpl(ffmpegPath, args, { stdio: ["ignore", "ignore", "pipe"] });
-    const session = { process: ffmpeg, stderr: "" };
+    const session = { process: ffmpeg, stderr: "", cleanupTimer: null };
     ffmpeg.stderr?.on("data", (chunk) => {
       session.stderr = `${session.stderr}${chunk}`.slice(-4000);
     });
     ffmpeg.on?.("exit", () => {
+      if (session.cleanupTimer) {
+        clearTimeout(session.cleanupTimer);
+        session.cleanupTimer = null;
+      }
       if (hlsSessions.get(sessionId) === session) {
         hlsSessions.delete(sessionId);
       }
     });
     hlsSessions.set(sessionId, session);
+    touchHlsSession(sessionId);
     return { dir, playlistPath, sessionId };
   }
 
@@ -419,6 +458,8 @@ export function createApp(store, options = {}) {
         await startHlsPreview(channel, source, stableSourceIndex, expectedSourceVersion, {
           forceRestart: req.query.restart === "1"
         });
+      } else {
+        touchHlsSession(sessionId);
       }
 
       const filePath = path.join(dir, fileName);

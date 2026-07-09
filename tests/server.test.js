@@ -363,6 +363,49 @@ describe("server routes", () => {
     }
   });
 
+  test("stops idle ffmpeg hls preview after playback stops", async () => {
+    const hlsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "iptv-hls-"));
+    const processMock = new EventEmitter();
+    processMock.stderr = new EventEmitter();
+    processMock.exitCode = null;
+    processMock.signalCode = null;
+    processMock.kill = jest.fn();
+    const spawnImpl = jest.fn((_command, args) => {
+      const outputPath = args.at(-1);
+      setTimeout(async () => {
+        await fs.mkdir(path.dirname(outputPath), { recursive: true });
+        await fs.writeFile(outputPath, "#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:2,\nsegment_00000.ts\n", "utf8");
+      }, 5);
+      return processMock;
+    });
+    const store = createFakeStore([
+      {
+        id: "sc",
+        name: "SCTV",
+        sources: [
+          { sourceIndex: 0, sourceName: "RTP Proxy", url: "http://example.test/rtp/239.253.43.119:5146" }
+        ]
+      }
+    ]);
+
+    try {
+      const app = createApp(store, { hlsRoot, spawnImpl, hlsStartTimeoutMs: 1000, hlsIdleTimeoutMs: 300 });
+      const playerResponse = await request(app).get("/player/sc?source=0");
+      const hlsPath = playerResponse.text.match(/\/hls\/sc\/0\/[^/]+\/index\.m3u8/)?.[0];
+
+      expect(hlsPath).toBeTruthy();
+
+      await request(app).get(hlsPath).expect(200);
+      expect(processMock.kill).not.toHaveBeenCalled();
+
+      await new Promise((resolve) => setTimeout(resolve, 380));
+
+      expect(processMock.kill).toHaveBeenCalledWith("SIGTERM");
+    } finally {
+      await fs.rm(hlsRoot, { recursive: true, force: true });
+    }
+  });
+
   test("restarts hls preview when playlist is requested after ffmpeg exits", async () => {
     const hlsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "iptv-hls-"));
     const processes = [];
