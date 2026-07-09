@@ -589,7 +589,22 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
     * { box-sizing: border-box; }
     body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     main { display: grid; gap: 14px; padding: 20px; max-width: 1100px; margin: 0 auto; }
+    .player-wrap { position: relative; }
     video { width: 100%; aspect-ratio: 16 / 9; background: #020617; border: 1px solid var(--line); border-radius: 8px; }
+    .start-overlay {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: linear-gradient(transparent 45%, rgba(2, 6, 23, 0.72));
+      color: var(--text);
+      font-size: 22px;
+      font-weight: 700;
+      text-shadow: 0 1px 2px #020617;
+    }
+    .start-overlay.hidden { display: none; }
     .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; overflow-wrap: anywhere; }
     .actions { display: flex; flex-wrap: wrap; gap: 10px; }
     button { min-height: 38px; border: 1px solid var(--line); border-radius: 6px; padding: 0 12px; background: var(--accent); color: #04111d; font: inherit; cursor: pointer; }
@@ -610,7 +625,10 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
       <div class="muted">${sourceName}</div>
       <div>原始地址：<a href="${escapedRawUrl}">${escapedRawUrl}</a></div>
     </section>
-    <video id="player" class="player-video" controls autoplay playsinline></video>
+    <section class="player-wrap">
+      <video id="player" class="player-video" controls playsinline></video>
+      <button id="start-overlay" class="start-overlay">点击播放</button>
+    </section>
     <section class="actions">
       <button id="play-now">播放/继续</button>
       <button id="toggle-muted" class="secondary">静音</button>
@@ -640,6 +658,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
     const rawUrl = ${JSON.stringify(rawUrl)};
     let video = document.getElementById("player");
     const message = document.getElementById("message");
+    const startOverlay = document.getElementById("start-overlay");
     const playNow = document.getElementById("play-now");
     const toggleMuted = document.getElementById("toggle-muted");
     const reloadStream = document.getElementById("reload-stream");
@@ -653,6 +672,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
     const likelyMpegTs = ${JSON.stringify(likelyMpegTs)};
     let tsPlayer = null;
     let diagnosticsAttached = false;
+    let hasDecodedFrames = false;
 
     function setMessage(text) {
       message.textContent = text;
@@ -684,12 +704,15 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
       statusNetwork.textContent = networkText() + " / readyState " + video.readyState;
     }
 
+    function updateStartOverlay() {
+      startOverlay.classList.toggle("hidden", !video.paused);
+    }
+
     function resetVideoElement() {
       const nextVideo = video.cloneNode(false);
       nextVideo.id = "player";
       nextVideo.className = "player-video";
       nextVideo.controls = true;
-      nextVideo.autoplay = true;
       nextVideo.playsInline = true;
       video.replaceWith(nextVideo);
       video = nextVideo;
@@ -703,10 +726,12 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
       try {
         await video.play();
         updateStatus("播放中");
+        updateStartOverlay();
         appendLog("play() 成功");
       } catch (error) {
-        setMessage("浏览器拦截了自动播放，请点击“播放/继续”。" + (error?.message ? " " + error.message : ""));
+        setMessage("请点击视频中间的“点击播放”或下方“播放/继续”启动有声播放。" + (error?.message ? " " + error.message : ""));
         updateStatus("等待手动播放");
+        updateStartOverlay();
         appendLog("play() 失败：" + (error?.message || error?.name || "未知错误"));
       }
     }
@@ -745,6 +770,9 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
       video.addEventListener("stalled", () => setMessage(prefix + " 数据暂时中断，可能是源站卡顿或线路不可用。"));
       video.addEventListener("pause", () => setMessage(prefix + " 已暂停，请点击“播放/继续”。"));
       video.addEventListener("error", () => setMessage(prefix + " 播放器错误：" + (video.error?.message || video.error?.code || "未知错误")));
+      video.addEventListener("play", updateStartOverlay);
+      video.addEventListener("pause", updateStartOverlay);
+      video.addEventListener("click", () => tryPlay());
     }
 
     function loadMpegTs() {
@@ -766,26 +794,31 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
         autoCleanupMinBackwardDuration: 10
       });
       tsPlayer.on(mpegts.Events.ERROR, (type, detail, info) => {
-        setMessage("mpegts.js 错误：" + type + " / " + detail + (info ? " / " + JSON.stringify(info) : ""));
         appendLog("mpegts error: " + type + " / " + detail);
         if (String(detail || "").includes("MediaMSEError") || video.error) {
           appendLog("检测到 MediaMSEError，下一次重试会重建 video 元素");
-          setMessage("mpegts.js 错误：" + type + " / " + detail + "。请点“重试加载”，播放器会清理旧状态后重新连接。");
+          if (!hasDecodedFrames || video.paused) {
+            setMessage("mpegts.js 错误：" + type + " / " + detail + "。如画面不动，请点“重试加载”。");
+          }
+        } else {
+          setMessage("mpegts.js 错误：" + type + " / " + detail + (info ? " / " + JSON.stringify(info) : ""));
         }
       });
       tsPlayer.on(mpegts.Events.STATISTICS_INFO, (stats) => {
         if (stats?.decodedFrames > 0) {
+          hasDecodedFrames = true;
           setMessage("使用 mpegts.js 播放中。直播流时间显示 0:00 属于正常现象。");
         }
         appendLog("mpegts stats: speed=" + (stats?.speed || "-") + " decoded=" + (stats?.decodedFrames || "-"));
       });
       tsPlayer.attachMediaElement(video);
       tsPlayer.load();
-      tryPlay();
-      setMessage("使用 mpegts.js 播放 MPEG-TS/组播代理流。若画面停住，请点“播放/继续”或“重试加载”。");
+      updateStartOverlay();
+      setMessage("已预加载 MPEG-TS/组播代理流。请点击画面中间的“点击播放”启动有声播放。");
     }
 
     playNow.addEventListener("click", () => tryPlay());
+    startOverlay.addEventListener("click", () => tryPlay());
     toggleMuted.addEventListener("click", () => {
       video.muted = !video.muted;
       toggleMuted.textContent = video.muted ? "取消静音" : "静音";
@@ -798,12 +831,13 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
         loadMpegTs();
       } else {
         video.load();
-        tryPlay();
+        updateStartOverlay();
       }
     });
 
     window.addEventListener("beforeunload", destroyTsPlayer);
     attachVideoDiagnostics("测试播放器");
+    updateStartOverlay();
     setInterval(() => updateStatus(), 1000);
 
     if (protocolUnsupported) {
@@ -817,8 +851,9 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
     } else if (lower.includes(".m3u8")) {
       if (video.canPlayType("application/vnd.apple.mpegurl")) {
         video.src = playUrl;
-        tryPlay();
-        setMessage("使用浏览器原生 HLS 播放。");
+        video.load();
+        updateStartOverlay();
+        setMessage("已加载浏览器原生 HLS，请点击播放。");
       } else if (window.Hls && Hls.isSupported()) {
         const hls = new Hls();
         hls.loadSource(playUrl);
@@ -826,15 +861,16 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl }) {
         hls.on(Hls.Events.ERROR, (_event, data) => {
           setMessage("hls.js 错误：" + data.type + " / " + data.details);
         });
-        tryPlay();
-        setMessage("使用 hls.js 播放。");
+        updateStartOverlay();
+        setMessage("已加载 hls.js，请点击播放。");
       } else {
         setMessage("当前浏览器不支持 HLS 播放。");
       }
     } else {
       video.src = playUrl;
-      tryPlay();
-      setMessage("使用浏览器原生播放器尝试播放。");
+      video.load();
+      updateStartOverlay();
+      setMessage("已加载浏览器原生播放器，请点击播放。");
     }
   </script>
 </body>

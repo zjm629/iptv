@@ -233,6 +233,8 @@ describe("server routes", () => {
     expect(response.text).toContain('type: "mpegts"');
     expect(response.text).toContain("mpegts.Events.ERROR");
     expect(response.text).toContain("player-status");
+    expect(response.text).toContain("start-overlay");
+    expect(response.text).toContain("点击播放");
     expect(response.text).toContain("toggle-muted");
     expect(response.text).toContain("resetVideoElement");
     expect(response.text).toContain("MediaMSEError");
