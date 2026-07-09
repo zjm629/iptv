@@ -70,15 +70,6 @@ async function waitForFile(filePath, timeoutMs) {
   return false;
 }
 
-async function isReadyFile(filePath) {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.size > 0;
-  } catch (_error) {
-    return false;
-  }
-}
-
 function proxyHttpStream(sourceUrl, res, next, redirects = 0) {
   let parsedUrl;
   try {
@@ -143,11 +134,7 @@ export function createApp(store, options = {}) {
     const dir = path.join(hlsRoot, sessionId);
     const playlistPath = path.join(dir, "index.m3u8");
     const existing = hlsSessions.get(sessionId);
-    if (existing && existing.process.exitCode === null && existing.process.signalCode === null) {
-      return { dir, playlistPath, sessionId };
-    }
-
-    if (!options.forceRestart && await isReadyFile(playlistPath)) {
+    if (!options.forceRestart && existing && existing.process.exitCode === null && existing.process.signalCode === null) {
       return { dir, playlistPath, sessionId };
     }
 

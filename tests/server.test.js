@@ -213,6 +213,7 @@ describe("server routes", () => {
     expect(response.text).toContain("CCTV-1");
     expect(response.text).toContain("http://b.example/cctv1.m3u8");
     expect(response.text).toContain("video");
+    expect(response.text).toContain("playsinline autoplay");
     expect(response.text).toContain("hls.js");
   });
 
@@ -244,7 +245,8 @@ describe("server routes", () => {
     expect(response.text).toContain("restart=1");
     expect(response.text).toContain("isSafariNativeHls");
     expect(response.text).toContain("Hls.Events.MANIFEST_PARSED");
-    expect(response.text).toContain("tryAutoplayMuted");
+    expect(response.text).toContain("tryAutoplay");
+    expect(response.text).toContain("muted = false");
     expect(response.text).toContain("muted = true");
   });
 
@@ -351,11 +353,12 @@ describe("server routes", () => {
     }
   });
 
-  test("serves cached hls playlists and segments after ffmpeg exits without restarting preview", async () => {
+  test("restarts hls preview when playlist is requested after ffmpeg exits", async () => {
     const hlsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "iptv-hls-"));
     const processes = [];
     const spawnImpl = jest.fn((_command, args) => {
       const outputPath = args.at(-1);
+      const spawnNumber = processes.length + 1;
       const processMock = new EventEmitter();
       processMock.stderr = new EventEmitter();
       processMock.exitCode = null;
@@ -365,8 +368,8 @@ describe("server routes", () => {
       setTimeout(async () => {
         const dir = path.dirname(outputPath);
         await fs.mkdir(dir, { recursive: true });
-        await fs.writeFile(path.join(dir, "segment_00000.ts"), "segment-data", "utf8");
-        await fs.writeFile(outputPath, "#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:2,\nsegment_00000.ts\n", "utf8");
+        await fs.writeFile(path.join(dir, `segment_${spawnNumber}.ts`), `segment-${spawnNumber}`, "utf8");
+        await fs.writeFile(outputPath, `#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:2,\nsegment_${spawnNumber}.ts\n`, "utf8");
       }, 5);
       return processMock;
     });
@@ -392,13 +395,10 @@ describe("server routes", () => {
       processes[0].emit("exit", 1);
 
       const playlistResponse = await request(app).get(hlsPath);
-      const segmentResponse = await request(app).get(hlsPath.replace("index.m3u8", "segment_00000.ts"));
 
       expect(playlistResponse.status).toBe(200);
-      expect(playlistResponse.text).toContain("segment_00000.ts");
-      expect(segmentResponse.status).toBe(200);
-      expect(Buffer.from(segmentResponse.body).toString("utf8")).toBe("segment-data");
-      expect(spawnImpl).toHaveBeenCalledTimes(1);
+      expect(playlistResponse.text).toContain("segment_2.ts");
+      expect(spawnImpl).toHaveBeenCalledTimes(2);
     } finally {
       await fs.rm(hlsRoot, { recursive: true, force: true });
     }

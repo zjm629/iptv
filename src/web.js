@@ -626,7 +626,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
       <div>原始地址：<a href="${escapedRawUrl}">${escapedRawUrl}</a></div>
     </section>
     <section class="player-wrap">
-      <video id="player" class="player-video" controls playsinline></video>
+      <video id="player" class="player-video" controls playsinline autoplay></video>
       <button id="start-overlay" class="start-overlay">点击播放</button>
     </section>
     <section class="actions">
@@ -710,11 +710,22 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
       startOverlay.classList.toggle("hidden", !video.paused);
     }
 
-    async function tryAutoplayMuted(reason) {
-      video.muted = true;
-      toggleMuted.textContent = "取消静音";
-      appendLog("尝试静音自动播放" + (reason ? "：" + reason : ""));
-      await tryPlay();
+    async function tryAutoplay(reason) {
+      video.muted = false;
+      toggleMuted.textContent = "静音";
+      appendLog("尝试有声自动播放" + (reason ? "：" + reason : ""));
+      try {
+        await video.play();
+        updateStatus("播放中");
+        updateStartOverlay();
+        appendLog("有声自动播放成功");
+      } catch (error) {
+        appendLog("有声自动播放被浏览器拦截，改用静音自动播放：" + (error?.message || error?.name || "未知错误"));
+        video.muted = true;
+        toggleMuted.textContent = "取消静音";
+        setMessage("浏览器拦截了有声自动播放，已改为静音自动播放。需要声音请点“取消静音”。");
+        await tryPlay();
+      }
     }
 
     function resetVideoElement() {
@@ -723,6 +734,8 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
       nextVideo.className = "player-video";
       nextVideo.controls = true;
       nextVideo.playsInline = true;
+      nextVideo.autoplay = true;
+      nextVideo.muted = false;
       video.replaceWith(nextVideo);
       video = nextVideo;
       diagnosticsAttached = false;
@@ -851,8 +864,8 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
         hlsPlayer.on(Hls.Events.MANIFEST_PARSED, () => {
           appendLog("hls manifest parsed");
           updateStartOverlay();
-          setMessage(label + " 已解析播放清单，正在静音自动播放。需要声音请点“取消静音”。");
-          tryAutoplayMuted("HLS 清单已解析");
+          setMessage(label + " 已解析播放清单，正在尝试自动播放。");
+          tryAutoplay("HLS 清单已解析");
         });
         hlsPlayer.on(Hls.Events.ERROR, (_event, data) => {
           appendLog("hls error: " + data.type + " / " + data.details + (data.response ? " / HTTP " + data.response.code : ""));
@@ -867,8 +880,8 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
         video.src = url;
         video.load();
         updateStartOverlay();
-        setMessage(label + " 已加载，正在静音自动播放。需要声音请点“取消静音”。");
-        tryAutoplayMuted("Safari 原生 HLS 已加载");
+        setMessage(label + " 已加载，正在尝试自动播放。");
+        tryAutoplay("Safari 原生 HLS 已加载");
         return;
       }
       setMessage("当前浏览器不支持 HLS 播放。");
@@ -910,8 +923,8 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
         video.src = playUrl;
         video.load();
         updateStartOverlay();
-        setMessage("已加载浏览器原生 HLS，正在静音自动播放。需要声音请点“取消静音”。");
-        tryAutoplayMuted("原生 HLS 已加载");
+        setMessage("已加载浏览器原生 HLS，正在尝试自动播放。");
+        tryAutoplay("原生 HLS 已加载");
       } else if (window.Hls && Hls.isSupported()) {
         const hls = new Hls();
         hls.loadSource(playUrl);
@@ -919,9 +932,9 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
         hls.on(Hls.Events.ERROR, (_event, data) => {
           setMessage("hls.js 错误：" + data.type + " / " + data.details);
         });
-        hls.on(Hls.Events.MANIFEST_PARSED, () => tryAutoplayMuted("HLS 清单已解析"));
+        hls.on(Hls.Events.MANIFEST_PARSED, () => tryAutoplay("HLS 清单已解析"));
         updateStartOverlay();
-        setMessage("已加载 hls.js，正在静音自动播放。需要声音请点“取消静音”。");
+        setMessage("已加载 hls.js，正在尝试自动播放。");
       } else {
         setMessage("当前浏览器不支持 HLS 播放。");
       }
@@ -929,8 +942,8 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
       video.src = playUrl;
       video.load();
       updateStartOverlay();
-      setMessage("已加载浏览器原生播放器，正在静音自动播放。需要声音请点“取消静音”。");
-      tryAutoplayMuted("原生播放器已加载");
+      setMessage("已加载浏览器原生播放器，正在尝试自动播放。");
+      tryAutoplay("原生播放器已加载");
     }
   </script>
 </body>
