@@ -577,6 +577,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
     /\/(rtp|udp)\//i.test(rawUrl) ||
     lowerUrl.includes(".ts")
   );
+  const useHlsPreview = likelyMpegTs || lowerUrl.includes(".m3u8");
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -671,6 +672,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
     const lower = rawUrl.toLowerCase();
     const protocolUnsupported = ${JSON.stringify(protocolUnsupported)};
     const likelyMpegTs = ${JSON.stringify(likelyMpegTs)};
+    const useHlsPreview = ${JSON.stringify(useHlsPreview)};
     let tsPlayer = null;
     let hlsPlayer = null;
     let diagnosticsAttached = false;
@@ -917,7 +919,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
     });
     reloadStream.addEventListener("click", () => {
       appendLog("手动重试加载");
-      if (likelyMpegTs) {
+      if (useHlsPreview) {
         loadHlsPreview(restartPreviewUrl(hlsPreviewUrl), "FFmpeg HLS 稳定预览");
       } else {
         video.load();
@@ -932,7 +934,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
 
     if (protocolUnsupported) {
       setMessage("浏览器通常不能直接拉取 rtp://、udp://、rtsp://；如无法播放，请复制原始地址到电视端测试。");
-    } else if (likelyMpegTs) {
+    } else if (useHlsPreview) {
       loadHlsPreview(hlsPreviewUrl, "FFmpeg HLS 稳定预览");
     } else if (lower.includes(".m3u8")) {
       if (video.canPlayType("application/vnd.apple.mpegurl")) {

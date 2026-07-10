@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { jest } from "@jest/globals";
-import { createApp } from "../src/server.js";
+import { createApp, DEFAULT_HLS_START_TIMEOUT_MS } from "../src/server.js";
 
 function createFakeStore(channelOverrides) {
   const channels = channelOverrides || [
@@ -215,6 +215,32 @@ describe("server routes", () => {
     expect(response.text).toContain("video");
     expect(response.text).toContain("playsinline autoplay");
     expect(response.text).toContain("hls.js");
+  });
+
+  test("uses ffmpeg hls preview for remote m3u8 source testing", async () => {
+    const store = createFakeStore([
+      {
+        id: "cctv1",
+        name: "CCTV1",
+        sources: [
+          { sourceIndex: 35, sourceName: "gddx_jd", url: "http://183.2.73.7:9901/tsfile/live/0001_1.m3u8?key=txiptv" }
+        ]
+      }
+    ]);
+
+    const response = await request(createApp(store))
+      .get("/player/cctv1?source=35")
+      .set("Host", "vps.example:3080");
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("http://183.2.73.7:9901/tsfile/live/0001_1.m3u8?key=txiptv");
+    expect(response.text).toContain("const useHlsPreview = true");
+    expect(response.text).toContain("loadHlsPreview(hlsPreviewUrl");
+    expect(response.text).toContain("FFmpeg HLS 稳定预览");
+  });
+
+  test("uses longer default hls preview startup timeout", () => {
+    expect(DEFAULT_HLS_START_TIMEOUT_MS).toBe(25000);
   });
 
   test("serves ffmpeg hls player support for http rtp proxy streams", async () => {

@@ -21,6 +21,8 @@ const TEST_PLAYLIST_FILES = new Set([
   "test4.json"
 ]);
 
+export const DEFAULT_HLS_START_TIMEOUT_MS = 25000;
+
 function getBaseUrl(req) {
   return `${req.protocol}://${req.get("host")}`;
 }
@@ -126,7 +128,7 @@ export function createApp(store, options = {}) {
   const spawnImpl = options.spawnImpl || spawn;
   const ffmpegPath = options.ffmpegPath || process.env.FFMPEG_PATH || "ffmpeg";
   const hlsRoot = options.hlsRoot || process.env.HLS_CACHE_DIR || path.join(os.tmpdir(), "iptv-hls-preview");
-  const hlsStartTimeoutMs = options.hlsStartTimeoutMs || 8000;
+  const hlsStartTimeoutMs = options.hlsStartTimeoutMs ?? Number.parseInt(process.env.HLS_START_TIMEOUT_MS || String(DEFAULT_HLS_START_TIMEOUT_MS), 10);
   const hlsIdleTimeoutMs = options.hlsIdleTimeoutMs ?? Number.parseInt(process.env.HLS_IDLE_TIMEOUT_MS || "30000", 10);
   const hlsSessions = new Map();
 
