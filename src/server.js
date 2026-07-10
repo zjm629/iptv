@@ -56,6 +56,43 @@ function sourceUrlVersion(value) {
   return crypto.createHash("sha1").update(String(value || "")).digest("hex").slice(0, 12);
 }
 
+function looksLikeM3u8(sourceUrl, contentType = "") {
+  return contentType.toLowerCase().includes("mpegurl") ||
+    contentType.toLowerCase().includes("application/vnd.apple") ||
+    String(sourceUrl || "").toLowerCase().split("?")[0].endsWith(".m3u8");
+}
+
+function rewriteM3u8Playlist(content, sourceUrl, rewriteUrl) {
+  return String(content || "").split(/\r?\n/).map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      return line;
+    }
+
+    try {
+      return rewriteUrl(new URL(trimmed, sourceUrl).toString());
+    } catch (_error) {
+      return line;
+    }
+  }).join("\n");
+}
+
+function resolveStreamAssetUrl(sourceUrl, assetUrl) {
+  let source;
+  let asset;
+  try {
+    source = new URL(sourceUrl);
+    asset = new URL(assetUrl, source);
+  } catch (_error) {
+    return null;
+  }
+
+  if (!/^https?:$/.test(asset.protocol) || asset.origin !== source.origin) {
+    return null;
+  }
+  return asset.toString();
+}
+
 async function waitForFile(filePath, timeoutMs) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -72,7 +109,7 @@ async function waitForFile(filePath, timeoutMs) {
   return false;
 }
 
-function proxyHttpStream(sourceUrl, res, next, redirects = 0) {
+function proxyHttpStream(sourceUrl, res, next, redirects = 0, options = {}) {
   let parsedUrl;
   try {
     parsedUrl = new URL(sourceUrl);
@@ -94,7 +131,7 @@ function proxyHttpStream(sourceUrl, res, next, redirects = 0) {
     if (upstreamRes.statusCode >= 300 && upstreamRes.statusCode < 400 && location && redirects < 5) {
       upstreamRes.resume();
       const redirectUrl = new URL(location, parsedUrl).toString();
-      proxyHttpStream(redirectUrl, res, next, redirects + 1);
+      proxyHttpStream(redirectUrl, res, next, redirects + 1, options);
       return;
     }
 
@@ -104,8 +141,23 @@ function proxyHttpStream(sourceUrl, res, next, redirects = 0) {
       return;
     }
 
+    const contentType = upstreamRes.headers["content-type"] || "video/mp2t";
+    if (options.rewriteM3u8 && looksLikeM3u8(sourceUrl, contentType)) {
+      const chunks = [];
+      upstreamRes.on("data", (chunk) => chunks.push(chunk));
+      upstreamRes.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        res.status(upstreamRes.statusCode || 200);
+        res.type("application/vnd.apple.mpegurl");
+        res.setHeader("cache-control", "no-store");
+        res.send(rewriteM3u8Playlist(body, sourceUrl, options.rewriteUrl));
+      });
+      upstreamRes.on("error", next);
+      return;
+    }
+
     res.status(upstreamRes.statusCode || 200);
-    res.setHeader("content-type", upstreamRes.headers["content-type"] || "video/mp2t");
+    res.setHeader("content-type", contentType);
     res.setHeader("cache-control", "no-store");
     res.flushHeaders?.();
 
@@ -417,7 +469,19 @@ export function createApp(store, options = {}) {
         return;
       }
 
-      const upstreamReq = proxyHttpStream(source.url, res, next);
+      const stableSourceIndex = source.sourceIndex ?? sourceIndex;
+      const assetUrl = typeof req.query.asset === "string" && req.query.asset
+        ? resolveStreamAssetUrl(source.url, req.query.asset)
+        : null;
+      if (req.query.asset && !assetUrl) {
+        res.status(400).send("Invalid stream asset URL.");
+        return;
+      }
+
+      const upstreamReq = proxyHttpStream(assetUrl || source.url, res, next, 0, {
+        rewriteM3u8: !assetUrl,
+        rewriteUrl: (url) => `${getBaseUrl(req)}/stream/${encodeURIComponent(channel.id)}?source=${stableSourceIndex}&asset=${encodeURIComponent(url)}`
+      });
       res.on("close", () => upstreamReq?.destroy());
     } catch (error) {
       next(error);

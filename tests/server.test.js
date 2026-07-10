@@ -335,6 +335,57 @@ describe("server routes", () => {
     }
   });
 
+  test("rewrites proxied m3u8 relative segments through stream endpoint", async () => {
+    const upstream = http.createServer((req, res) => {
+      if (req.url.startsWith("/tsfile/live/0001_1.m3u8")) {
+        res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl" });
+        res.end("#EXTM3U\n#EXTINF:5,\nlive_1_1_1.ts?key=txiptv&key2=1\n");
+        return;
+      }
+      if (req.url.startsWith("/tsfile/live/live_1_1_1.ts")) {
+        res.writeHead(200, { "content-type": "video/mp2t" });
+        res.end("segment-data");
+        return;
+      }
+      res.writeHead(404);
+      res.end("missing");
+    });
+    await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const { port } = upstream.address();
+    const sourceUrl = `http://127.0.0.1:${port}/tsfile/live/0001_1.m3u8?key=txiptv`;
+
+    try {
+      const store = createFakeStore([
+        {
+          id: "cctv1",
+          name: "CCTV1",
+          sources: [
+            { sourceIndex: 35, sourceName: "gddx_jd", url: sourceUrl }
+          ]
+        }
+      ]);
+      const app = createApp(store);
+      const playlistResponse = await request(app)
+        .get("/stream/cctv1?source=35")
+        .set("Host", "vps.example:3080");
+
+      expect(playlistResponse.status).toBe(200);
+      expect(playlistResponse.headers["content-type"]).toContain("application/vnd.apple.mpegurl");
+      expect(playlistResponse.text).toContain("/stream/cctv1?source=35&asset=");
+      expect(playlistResponse.text).not.toContain("\nlive_1_1_1.ts");
+
+      const assetPath = playlistResponse.text.match(/\/stream\/cctv1\?source=35&asset=[^\n]+/)?.[0];
+      expect(assetPath).toBeTruthy();
+
+      const segmentResponse = await request(app).get(assetPath);
+      expect(segmentResponse.status).toBe(200);
+      expect(segmentResponse.headers["content-type"]).toContain("video/mp2t");
+      expect(Buffer.from(segmentResponse.body).toString("utf8")).toBe("segment-data");
+    } finally {
+      await new Promise((resolve) => upstream.close(resolve));
+    }
+  });
+
   test("starts ffmpeg hls preview for stream testing", async () => {
     const hlsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "iptv-hls-"));
     const processMock = new EventEmitter();
