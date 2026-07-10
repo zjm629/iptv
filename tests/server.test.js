@@ -217,7 +217,7 @@ describe("server routes", () => {
     expect(response.text).toContain("hls.js");
   });
 
-  test("uses ffmpeg hls preview for remote m3u8 source testing", async () => {
+  test("uses proxied hls directly for remote m3u8 source testing", async () => {
     const store = createFakeStore([
       {
         id: "cctv1",
@@ -234,9 +234,9 @@ describe("server routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.text).toContain("http://183.2.73.7:9901/tsfile/live/0001_1.m3u8?key=txiptv");
-    expect(response.text).toContain("const useHlsPreview = true");
-    expect(response.text).toContain("loadHlsPreview(hlsPreviewUrl");
-    expect(response.text).toContain("FFmpeg HLS 稳定预览");
+    expect(response.text).toContain("const useHlsPreview = false");
+    expect(response.text).toContain("const useDirectHls = true");
+    expect(response.text).toContain("loadDirectHls(streamUrl");
   });
 
   test("uses longer default hls preview startup timeout", () => {

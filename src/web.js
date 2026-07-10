@@ -577,7 +577,8 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
     /\/(rtp|udp)\//i.test(rawUrl) ||
     lowerUrl.includes(".ts")
   );
-  const useHlsPreview = likelyMpegTs || lowerUrl.includes(".m3u8");
+  const useDirectHls = lowerUrl.includes(".m3u8");
+  const useHlsPreview = likelyMpegTs;
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -672,6 +673,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
     const lower = rawUrl.toLowerCase();
     const protocolUnsupported = ${JSON.stringify(protocolUnsupported)};
     const likelyMpegTs = ${JSON.stringify(likelyMpegTs)};
+    const useDirectHls = ${JSON.stringify(useDirectHls)};
     const useHlsPreview = ${JSON.stringify(useHlsPreview)};
     let tsPlayer = null;
     let hlsPlayer = null;
@@ -845,7 +847,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
       setMessage("已预加载 MPEG-TS/组播代理流。请点击画面中间的“点击播放”启动有声播放。");
     }
 
-    function loadHlsPreview(url, label) {
+    function loadHlsStream(url, label, startupMessage) {
       destroyTsPlayer();
       if (video.error) {
         resetVideoElement();
@@ -891,7 +893,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
         });
         hlsPlayer.attachMedia(video);
         updateStartOverlay();
-        setMessage(label + " 正在启动，FFmpeg 需要几秒生成首个片段。请稍后点击播放。");
+        setMessage(startupMessage);
         return;
       }
       if (isSafariNativeHls) {
@@ -903,6 +905,14 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
         return;
       }
       setMessage("当前浏览器不支持 HLS 播放。");
+    }
+
+    function loadHlsPreview(url, label) {
+      loadHlsStream(url, label, label + " 正在启动，FFmpeg 需要几秒生成首个片段。请稍后点击播放。");
+    }
+
+    function loadDirectHls(url, label) {
+      loadHlsStream(url, label, label + " 正在加载代理播放清单，避免浏览器跨域和分片路径问题。");
     }
 
     function restartPreviewUrl(url) {
@@ -921,6 +931,8 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
       appendLog("手动重试加载");
       if (useHlsPreview) {
         loadHlsPreview(restartPreviewUrl(hlsPreviewUrl), "FFmpeg HLS 稳定预览");
+      } else if (useDirectHls) {
+        loadDirectHls(restartPreviewUrl(streamUrl), "代理 HLS 直连播放");
       } else {
         video.load();
         updateStartOverlay();
@@ -934,42 +946,10 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
 
     if (protocolUnsupported) {
       setMessage("浏览器通常不能直接拉取 rtp://、udp://、rtsp://；如无法播放，请复制原始地址到电视端测试。");
+    } else if (useDirectHls) {
+      loadDirectHls(streamUrl, "代理 HLS 直连播放");
     } else if (useHlsPreview) {
       loadHlsPreview(hlsPreviewUrl, "FFmpeg HLS 稳定预览");
-    } else if (lower.includes(".m3u8")) {
-      if (video.canPlayType("application/vnd.apple.mpegurl")) {
-        video.src = playUrl;
-        video.load();
-        updateStartOverlay();
-        setMessage("已加载浏览器原生 HLS，正在尝试自动播放。");
-        tryAutoplay("原生 HLS 已加载");
-      } else if (window.Hls && Hls.isSupported()) {
-        const hls = new Hls();
-        hls.loadSource(playUrl);
-        hls.attachMedia(video);
-        hls.on(Hls.Events.ERROR, (_event, data) => {
-          if (!data.fatal) {
-            setMessage("hls.js 正在播放，检测到可恢复缓冲错误：" + data.details);
-            return;
-          }
-          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-            hls.recoverMediaError();
-            setMessage("hls.js 正在自动恢复媒体缓冲。");
-            return;
-          }
-          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-            hls.startLoad();
-            setMessage("hls.js 网络加载异常，正在重新拉流。");
-            return;
-          }
-          setMessage("hls.js 错误：" + data.type + " / " + data.details);
-        });
-        hls.on(Hls.Events.MANIFEST_PARSED, () => tryAutoplay("HLS 清单已解析"));
-        updateStartOverlay();
-        setMessage("已加载 hls.js，正在尝试自动播放。");
-      } else {
-        setMessage("当前浏览器不支持 HLS 播放。");
-      }
     } else {
       video.src = playUrl;
       video.load();
