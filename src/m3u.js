@@ -30,7 +30,7 @@ function escapeLiveValue(value = "") {
 function buildPlayUrls(channel, baseUrl) {
   const sources = channel.sources?.length ? channel.sources : [{}];
   return sources.map((source, index) =>
-    `${baseUrl}/play/${encodeURIComponent(channel.id)}?source=${source.sourceIndex ?? index}`
+    `${baseUrl}/play/${encodeURIComponent(channel.id)}.m3u8?source=${source.sourceIndex ?? index}`
   );
 }
 
@@ -104,7 +104,7 @@ export function generatePlaylist(channels, baseUrl) {
 
     lines.push(`#EXTINF:-1 ${attrs.join(" ")},${channel.name}`);
     const sourceIndex = channel.sources?.[0]?.sourceIndex ?? channel.defaultSourceIndex ?? 0;
-    lines.push(`${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${sourceIndex}`);
+    lines.push(`${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}.m3u8?source=${sourceIndex}`);
   }
 
   return `${lines.join("\n")}\n`;
@@ -132,7 +132,7 @@ export function generateSourcePlaylist(channels, baseUrl) {
 
       lines.push(`#EXTINF:-1 ${attrs.join(" ")},${channel.name}`);
       const playSourceIndex = sources[sourceIndex]?.sourceIndex ?? sourceIndex;
-      lines.push(`${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}?source=${playSourceIndex}`);
+      lines.push(`${cleanBaseUrl}/play/${encodeURIComponent(channel.id)}.m3u8?source=${playSourceIndex}`);
     }
   }
 

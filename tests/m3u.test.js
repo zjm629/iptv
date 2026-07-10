@@ -77,8 +77,8 @@ describe("m3u generation", () => {
 
     expect(playlist.match(/,CCTV-1 综合/g)).toHaveLength(2);
     expect(playlist.match(/tvg-id="cctv1"/g)).toHaveLength(2);
-    expect(playlist).toContain("http://vps.example:3080/play/cctv1?source=0");
-    expect(playlist).toContain("http://vps.example:3080/play/cctv1?source=1");
+    expect(playlist).toContain("http://vps.example:3080/play/cctv1.m3u8?source=0");
+    expect(playlist).toContain("http://vps.example:3080/play/cctv1.m3u8?source=1");
   });
 
   test("generates live m3u with one channel entry and joined source links", () => {
@@ -103,7 +103,7 @@ describe("m3u generation", () => {
       '#EXTINF:-1 tvg-name="CCTV1" tvg-logo="https://live.fanmingming.com/tv/CCTV1.png" group-title="CCTV",CCTV1'
     );
     expect(playlist).toContain(
-      "http://vps.example:3080/play/cctv1?source=3#http://vps.example:3080/play/cctv1?source=5"
+      "http://vps.example:3080/play/cctv1.m3u8?source=3#http://vps.example:3080/play/cctv1.m3u8?source=5"
     );
     expect(playlist).not.toContain("#genre#");
   });
@@ -119,11 +119,11 @@ describe("m3u generation", () => {
 
     expect(playlist.trim().split("\n")).toEqual([
       "推荐频道,#genre#",
-      "CCTV1,http://vps.example:3080/play/cctv1?source=0",
+      "CCTV1,http://vps.example:3080/play/cctv1.m3u8?source=0",
       "央视频道,#genre#",
-      "CCTV1,http://vps.example:3080/play/cctv1?source=0",
+      "CCTV1,http://vps.example:3080/play/cctv1.m3u8?source=0",
       "卫视频道,#genre#",
-      "Hunan,http://vps.example:3080/play/hunan?source=0"
+      "Hunan,http://vps.example:3080/play/hunan.m3u8?source=0"
     ]);
   });
 });

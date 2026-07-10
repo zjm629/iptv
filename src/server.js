@@ -577,8 +577,9 @@ export function createApp(store, options = {}) {
     }
   });
 
-  app.get("/play/:channelId", (req, res) => {
-    const channel = store.getChannel(req.params.channelId);
+  app.get(["/play/:channelId", "/play/:channelId.m3u8"], (req, res) => {
+    const channelId = String(req.params.channelId || "").replace(/\.m3u8$/i, "");
+    const channel = store.getChannel(channelId);
     if (!channel) {
       res.status(404).send("Channel not found");
       return;
@@ -590,6 +591,15 @@ export function createApp(store, options = {}) {
       findChannelSource(channel, sourceIndex);
     if (!source) {
       res.status(404).send("Source not found");
+      return;
+    }
+
+    if (req.path.toLowerCase().endsWith(".m3u8")) {
+      res
+        .status(302)
+        .type("application/vnd.apple.mpegurl")
+        .set("location", source.url)
+        .send("");
       return;
     }
 

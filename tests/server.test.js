@@ -60,7 +60,7 @@ describe("server routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("application/x-mpegurl");
-    expect(response.text).toContain("http://vps.example:3080/play/cctv1");
+    expect(response.text).toContain("http://vps.example:3080/play/cctv1.m3u8");
   });
 
   test("returns generated source-selection playlist", async () => {
@@ -71,8 +71,8 @@ describe("server routes", () => {
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("application/x-mpegurl");
     expect(response.text.match(/,CCTV-1/g)).toHaveLength(2);
-    expect(response.text).toContain("http://vps.example:3080/play/cctv1?source=0");
-    expect(response.text).toContain("http://vps.example:3080/play/cctv1?source=1");
+    expect(response.text).toContain("http://vps.example:3080/play/cctv1.m3u8?source=0");
+    expect(response.text).toContain("http://vps.example:3080/play/cctv1.m3u8?source=1");
   });
 
   test("returns TVBox live txt with grouped channels and merged source links", async () => {
@@ -85,7 +85,7 @@ describe("server routes", () => {
     expect(response.text).toContain("推荐频道,#genre#");
     expect(response.text).toContain("央视频道,#genre#");
     expect(response.text).toContain(
-      "CCTV-1,http://vps.example:3080/play/cctv1?source=0#http://vps.example:3080/play/cctv1?source=1"
+      "CCTV-1,http://vps.example:3080/play/cctv1.m3u8?source=0#http://vps.example:3080/play/cctv1.m3u8?source=1"
     );
     expect(response.text).not.toContain("全部频道,#genre#");
     expect(response.text).not.toContain("CCTV,#genre#");
@@ -102,7 +102,7 @@ describe("server routes", () => {
     expect(response.text).toContain('#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"');
     expect(response.text).toContain('#EXTINF:-1 tvg-name="CCTV-1" tvg-logo="https://logo.example/cctv.png" group-title="推荐频道",CCTV-1');
     expect(response.text).toContain(
-      "http://vps.example:3080/play/cctv1?source=0#http://vps.example:3080/play/cctv1?source=1"
+      "http://vps.example:3080/play/cctv1.m3u8?source=0#http://vps.example:3080/play/cctv1.m3u8?source=1"
     );
     expect(response.text).not.toContain("#genre#");
   });
@@ -179,6 +179,14 @@ describe("server routes", () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.location).toBe("http://b.example/cctv1.m3u8");
+  });
+
+  test("redirects m3u8-suffixed playback links for picky players", async () => {
+    const response = await request(createApp(createFakeStore())).get("/play/cctv1.m3u8?source=1");
+
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe("http://b.example/cctv1.m3u8");
+    expect(response.headers["content-type"]).toContain("application/vnd.apple.mpegurl");
   });
 
   test("redirects playback by stable source index after source order changes", async () => {

@@ -166,7 +166,8 @@ docker compose up -d --build
 - `GET /player/:channelId?source=0`：网页测试播放器。
 - `GET /hls/:channelId/:sourceIndex/:sourceVersion/index.m3u8`：网页测试播放器使用的 FFmpeg HLS 预览，`sourceVersion` 会随线路地址变化，避免复用旧源缓存。
 - `GET /stream/:channelId?source=0`：HTTP/HTTPS 原始流代理调试入口；代理 `.m3u8` 时会把相对分片地址改写回 `/stream`，避免分片路径丢失。
-- `GET /play/:channelId?source=0`：播放指定频道线路。
+- `GET /play/:channelId.m3u8?source=0`：播放指定频道线路，清单默认使用这个带 `.m3u8` 后缀的地址，方便部分播放器识别 HLS。
+- `GET /play/:channelId?source=0`：兼容旧播放地址。
 
 ## 配置文件
 
