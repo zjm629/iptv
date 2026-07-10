@@ -203,6 +203,30 @@ describe("server routes", () => {
     expect(response.headers.location).toBe("http://a.example/cctv1.m3u8");
   });
 
+  test("redirects management line playback by displayed line index", async () => {
+    const sources = Array.from({ length: 38 }, (_value, index) => ({
+      sourceIndex: index === 0 ? 37 : index - 1,
+      sourceName: `Line ${index + 1}`,
+      url: `http://source-${index + 1}.example/cctv1.m3u8`
+    }));
+    const channels = [
+      {
+        id: "cctv1",
+        name: "CCTV-1",
+        sources
+      }
+    ];
+    const store = {
+      ...createFakeStore(),
+      getChannel: (id) => channels.find((channel) => channel.id === id) || null
+    };
+
+    const response = await request(createApp(store)).get("/play/cctv1?line=37");
+
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe("http://source-38.example/cctv1.m3u8");
+  });
+
   test("serves browser player page for a channel source", async () => {
     const response = await request(createApp(createFakeStore()))
       .get("/player/cctv1?source=1")
@@ -217,7 +241,61 @@ describe("server routes", () => {
     expect(response.text).toContain("hls.js");
   });
 
-  test("uses proxied hls directly for remote m3u8 source testing", async () => {
+  test("serves browser player page by displayed line index", async () => {
+    const sources = Array.from({ length: 38 }, (_value, index) => ({
+      sourceIndex: index === 0 ? 37 : index - 1,
+      sourceName: `Line ${index + 1}`,
+      url: `http://source-${index + 1}.example/cctv1.m3u8`
+    }));
+    const channels = [
+      {
+        id: "cctv1",
+        name: "CCTV-1",
+        sources
+      }
+    ];
+    const store = {
+      ...createFakeStore(),
+      getChannel: (id) => channels.find((channel) => channel.id === id) || null
+    };
+
+    const response = await request(createApp(store))
+      .get("/player/cctv1?line=37")
+      .set("Host", "vps.example:3080");
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("http://source-38.example/cctv1.m3u8");
+    expect(response.text).not.toContain("http://source-1.example/cctv1.m3u8");
+  });
+
+  test("serves browser player source query by displayed line for management compatibility", async () => {
+    const sources = Array.from({ length: 38 }, (_value, index) => ({
+      sourceIndex: index === 0 ? 37 : index - 1,
+      sourceName: `Line ${index + 1}`,
+      url: `http://source-${index + 1}.example/cctv1.m3u8`
+    }));
+    const channels = [
+      {
+        id: "cctv1",
+        name: "CCTV-1",
+        sources
+      }
+    ];
+    const store = {
+      ...createFakeStore(),
+      getChannel: (id) => channels.find((channel) => channel.id === id) || null
+    };
+
+    const response = await request(createApp(store))
+      .get("/player/cctv1?source=37")
+      .set("Host", "vps.example:3080");
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("http://source-38.example/cctv1.m3u8");
+    expect(response.text).not.toContain("http://source-1.example/cctv1.m3u8");
+  });
+
+  test("uses ffmpeg hls preview for remote m3u8 source testing", async () => {
     const store = createFakeStore([
       {
         id: "cctv1",
@@ -234,9 +312,10 @@ describe("server routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.text).toContain("http://183.2.73.7:9901/tsfile/live/0001_1.m3u8?key=txiptv");
-    expect(response.text).toContain("const useHlsPreview = false");
-    expect(response.text).toContain("const useDirectHls = true");
-    expect(response.text).toContain("loadDirectHls(streamUrl");
+    expect(response.text).toContain("const useHlsPreview = true");
+    expect(response.text).toContain("const useDirectHls = false");
+    expect(response.text).toContain("loadHlsPreview(hlsPreviewUrl");
+    expect(response.text).toContain("FFmpeg HLS");
   });
 
   test("uses longer default hls preview startup timeout", () => {
@@ -424,10 +503,18 @@ describe("server routes", () => {
       expect(spawnImpl).toHaveBeenCalledWith("ffmpeg", expect.arrayContaining([
         "-i",
         "http://example.test/rtp/239.253.43.119:5146",
+        "-vf",
+        "scale=w='min(1280,iw)':h=-2",
         "-c:v",
         "libx264",
         "-preset",
-        "veryfast",
+        "ultrafast",
+        "-b:v",
+        "2500k",
+        "-maxrate",
+        "3000k",
+        "-bufsize",
+        "6000k",
         "-pix_fmt",
         "yuv420p",
         "-f",

@@ -41,11 +41,25 @@ function ensureChannelsAvailable(res, channels, type = "json") {
   return false;
 }
 
-function findChannelSource(channel, requestedSourceIndex) {
+function findChannelSource(channel, requestedSourceIndex, options = {}) {
   const sources = channel.sources || [];
+  if (options.preferPosition && Number.isInteger(requestedSourceIndex) && sources[requestedSourceIndex]) {
+    return sources[requestedSourceIndex];
+  }
+
   return sources.find((source) => source.sourceIndex === requestedSourceIndex) ||
     sources[requestedSourceIndex] ||
     sources[0];
+}
+
+function findChannelSourceByLine(channel, requestedLineIndex) {
+  const sources = channel.sources || [];
+  return Number.isInteger(requestedLineIndex) ? sources[requestedLineIndex] : null;
+}
+
+function parseQueryIndex(value, fallback = 0) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) ? parsed : fallback;
 }
 
 function safePathPart(value) {
@@ -245,17 +259,23 @@ export function createApp(store, options = {}) {
       "-map",
       "0:a?",
       "-vf",
-      "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+      "scale=w='min(1280,iw)':h=-2",
       "-c:v",
       "libx264",
       "-preset",
-      "veryfast",
+      "ultrafast",
       "-tune",
       "zerolatency",
       "-profile:v",
       "main",
       "-pix_fmt",
       "yuv420p",
+      "-b:v",
+      "2500k",
+      "-maxrate",
+      "3000k",
+      "-bufsize",
+      "6000k",
       "-g",
       "50",
       "-keyint_min",
@@ -434,8 +454,10 @@ export function createApp(store, options = {}) {
       return;
     }
 
-    const sourceIndex = Number.parseInt(req.query.source || "0", 10);
-    const source = findChannelSource(channel, sourceIndex);
+    const lineIndex = parseQueryIndex(req.query.line, null);
+    const sourceIndex = parseQueryIndex(req.query.source || "0", 0);
+    const source = findChannelSourceByLine(channel, lineIndex) ||
+      findChannelSource(channel, sourceIndex, { preferPosition: true });
     if (!source) {
       res.status(404).send("Source not found");
       return;
@@ -457,8 +479,10 @@ export function createApp(store, options = {}) {
         return;
       }
 
-      const sourceIndex = Number.parseInt(req.query.source || "0", 10);
-      const source = findChannelSource(channel, sourceIndex);
+      const lineIndex = parseQueryIndex(req.query.line, null);
+      const sourceIndex = parseQueryIndex(req.query.source || "0", 0);
+      const source = findChannelSourceByLine(channel, lineIndex) ||
+        findChannelSource(channel, sourceIndex);
       if (!source) {
         res.status(404).send("Source not found");
         return;
@@ -496,7 +520,7 @@ export function createApp(store, options = {}) {
         return;
       }
 
-      const requestedSourceIndex = Number.parseInt(req.params.sourceIndex || "0", 10);
+      const requestedSourceIndex = parseQueryIndex(req.params.sourceIndex || "0", 0);
       const source = findChannelSource(channel, requestedSourceIndex);
       if (!source) {
         res.status(404).send("Source not found");
@@ -557,8 +581,10 @@ export function createApp(store, options = {}) {
       return;
     }
 
-    const sourceIndex = Number.parseInt(req.query.source || "0", 10);
-    const source = findChannelSource(channel, sourceIndex);
+    const lineIndex = parseQueryIndex(req.query.line, null);
+    const sourceIndex = parseQueryIndex(req.query.source || "0", 0);
+    const source = findChannelSourceByLine(channel, lineIndex) ||
+      findChannelSource(channel, sourceIndex);
     if (!source) {
       res.status(404).send("Source not found");
       return;
