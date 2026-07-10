@@ -47,9 +47,12 @@ function findChannelSource(channel, requestedSourceIndex, options = {}) {
     return sources[requestedSourceIndex];
   }
 
-  return sources.find((source) => source.sourceIndex === requestedSourceIndex) ||
-    sources[requestedSourceIndex] ||
-    sources[0];
+  const matchedSource = sources.find((source) => source.sourceIndex === requestedSourceIndex);
+  if (matchedSource) {
+    return matchedSource;
+  }
+
+  return Number.isInteger(requestedSourceIndex) ? sources[requestedSourceIndex] || null : sources[0] || null;
 }
 
 function findChannelSourceByLine(channel, requestedLineIndex) {
@@ -259,7 +262,7 @@ export function createApp(store, options = {}) {
       "-map",
       "0:a?",
       "-vf",
-      "scale=w='min(1280,iw)':h=-2",
+      "scale=w='min(854,iw)':h=-2",
       "-c:v",
       "libx264",
       "-preset",
@@ -271,11 +274,11 @@ export function createApp(store, options = {}) {
       "-pix_fmt",
       "yuv420p",
       "-b:v",
-      "2500k",
+      "1200k",
       "-maxrate",
-      "3000k",
+      "1500k",
       "-bufsize",
-      "6000k",
+      "3000k",
       "-g",
       "50",
       "-keyint_min",
@@ -287,7 +290,7 @@ export function createApp(store, options = {}) {
       "-c:a",
       "aac",
       "-b:a",
-      "128k",
+      "96k",
       "-ac",
       "2",
       "-ar",

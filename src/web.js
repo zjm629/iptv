@@ -856,10 +856,12 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
         /^((?!chrome|android|crios|fxios|edg).)*safari/i.test(navigator.userAgent);
       if (window.Hls && Hls.isSupported() && !isSafariNativeHls) {
         hlsPlayer = new Hls({
-          liveSyncDurationCount: 3,
-          maxLiveSyncPlaybackRate: 1.5,
+          liveSyncDurationCount: 5,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 60,
+          maxLiveSyncPlaybackRate: 1.25,
           enableWorker: true,
-          lowLatencyMode: true
+          lowLatencyMode: false
         });
         hlsPlayer.on(Hls.Events.MEDIA_ATTACHED, () => {
           appendLog("hls media attached");

@@ -295,6 +295,29 @@ describe("server routes", () => {
     expect(response.text).not.toContain("http://source-1.example/cctv1.m3u8");
   });
 
+  test("returns 404 when requested source line is out of range", async () => {
+    const sources = Array.from({ length: 37 }, (_value, index) => ({
+      sourceIndex: index,
+      sourceName: `Line ${index + 1}`,
+      url: `http://source-${index + 1}.example/cctv1.m3u8`
+    }));
+    const channels = [
+      {
+        id: "cctv1",
+        name: "CCTV-1",
+        sources
+      }
+    ];
+    const store = {
+      ...createFakeStore(),
+      getChannel: (id) => channels.find((channel) => channel.id === id) || null
+    };
+
+    await request(createApp(store)).get("/player/cctv1?source=37").expect(404);
+    await request(createApp(store)).get("/play/cctv1?source=37").expect(404);
+    await request(createApp(store)).get("/stream/cctv1?source=37").expect(404);
+  });
+
   test("uses ffmpeg hls preview for remote m3u8 source testing", async () => {
     const store = createFakeStore([
       {
@@ -316,6 +339,9 @@ describe("server routes", () => {
     expect(response.text).toContain("const useDirectHls = false");
     expect(response.text).toContain("loadHlsPreview(hlsPreviewUrl");
     expect(response.text).toContain("FFmpeg HLS");
+    expect(response.text).toContain("liveSyncDurationCount: 5");
+    expect(response.text).toContain("maxBufferLength: 30");
+    expect(response.text).toContain("lowLatencyMode: false");
   });
 
   test("uses longer default hls preview startup timeout", () => {
@@ -504,17 +530,19 @@ describe("server routes", () => {
         "-i",
         "http://example.test/rtp/239.253.43.119:5146",
         "-vf",
-        "scale=w='min(1280,iw)':h=-2",
+        "scale=w='min(854,iw)':h=-2",
         "-c:v",
         "libx264",
         "-preset",
         "ultrafast",
         "-b:v",
-        "2500k",
+        "1200k",
         "-maxrate",
-        "3000k",
+        "1500k",
         "-bufsize",
-        "6000k",
+        "3000k",
+        "-b:a",
+        "96k",
         "-pix_fmt",
         "yuv420p",
         "-f",
