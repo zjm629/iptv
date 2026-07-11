@@ -272,6 +272,9 @@ describe("server routes", () => {
     expect(response.text).toContain("video");
     expect(response.text).toContain("playsinline autoplay");
     expect(response.text).toContain("hls.js");
+    expect(response.text).toContain("PotPlayer打开");
+    expect(response.text).toContain("potplayer://");
+    expect(response.text).toContain("未安装或未注册 potplayer:// 协议");
   });
 
   test("serves browser player page by displayed line index", async () => {

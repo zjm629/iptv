@@ -679,6 +679,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
       <button id="toggle-muted" class="secondary">静音</button>
       <button id="reload-stream" class="secondary">重试加载</button>
       <button id="ffmpeg-preview" class="secondary">FFmpeg预览</button>
+      <button id="open-potplayer" class="secondary">PotPlayer打开</button>
       <a href="${escapeHtmlValue(streamUrl || playUrl)}">打开代理流</a>
       <a href="${escapedRawUrl}">打开原始地址</a>
     </section>
@@ -710,6 +711,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
     const toggleMuted = document.getElementById("toggle-muted");
     const reloadStream = document.getElementById("reload-stream");
     const ffmpegPreview = document.getElementById("ffmpeg-preview");
+    const openPotPlayer = document.getElementById("open-potplayer");
     const statusState = document.getElementById("status-state");
     const statusTime = document.getElementById("status-time");
     const statusBuffer = document.getElementById("status-buffer");
@@ -990,6 +992,31 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
     ffmpegPreview.addEventListener("click", () => {
       appendLog("手动切换 FFmpeg HLS 预览");
       loadHlsPreview(restartPreviewUrl(hlsPreviewUrl), "FFmpeg HLS 稳定预览");
+    });
+    openPotPlayer.addEventListener("click", () => {
+      const targetUrl = rawUrl || streamUrl || playUrl;
+      if (!targetUrl) {
+        setMessage("当前线路没有可打开的地址。");
+        return;
+      }
+
+      appendLog("尝试调用 PotPlayer");
+      setMessage("正在尝试打开 PotPlayer。如果浏览器弹出确认框，请选择允许。");
+      const openedAt = Date.now();
+      let leftPage = false;
+      const markLeftPage = () => { leftPage = true; };
+      window.addEventListener("blur", markLeftPage, { once: true });
+      document.addEventListener("visibilitychange", markLeftPage, { once: true });
+      window.location.href = "potplayer://" + targetUrl;
+
+      setTimeout(() => {
+        window.removeEventListener("blur", markLeftPage);
+        document.removeEventListener("visibilitychange", markLeftPage);
+        if (!leftPage && Date.now() - openedAt >= 1200) {
+          setMessage("如果 PotPlayer 没有打开，说明本机可能未安装或未注册 potplayer:// 协议。请安装 PotPlayer，或点击“打开原始地址”后复制到 PotPlayer 的 Ctrl+U。");
+          appendLog("PotPlayer 可能未安装或协议未注册");
+        }
+      }, 1400);
     });
 
     window.addEventListener("beforeunload", destroyTsPlayer);
