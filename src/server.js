@@ -73,10 +73,18 @@ function sourceUrlVersion(value) {
   return crypto.createHash("sha1").update(String(value || "")).digest("hex").slice(0, 12);
 }
 
+function normalizeChannelIdParam(value) {
+  return String(value || "").replace(/\.(?:m3u8|ts)$/i, "");
+}
+
 function looksLikeM3u8(sourceUrl, contentType = "") {
   return contentType.toLowerCase().includes("mpegurl") ||
     contentType.toLowerCase().includes("application/vnd.apple") ||
     String(sourceUrl || "").toLowerCase().split("?")[0].endsWith(".m3u8");
+}
+
+function streamSuffixForSource(sourceUrl) {
+  return looksLikeM3u8(sourceUrl) ? ".m3u8" : ".ts";
 }
 
 function rewriteM3u8Playlist(content, sourceUrl, rewriteUrl) {
@@ -469,14 +477,14 @@ export function createApp(store, options = {}) {
     const stableSourceIndex = source.sourceIndex ?? sourceIndex;
     const sourceVersion = sourceUrlVersion(source.url);
     const playUrl = `${getBaseUrl(req)}/play/${encodeURIComponent(channel.id)}?source=${stableSourceIndex}`;
-    const streamUrl = `${getBaseUrl(req)}/stream/${encodeURIComponent(channel.id)}?source=${stableSourceIndex}`;
+    const streamUrl = `${getBaseUrl(req)}/stream/${encodeURIComponent(channel.id)}${streamSuffixForSource(source.url)}?source=${stableSourceIndex}`;
     const hlsPreviewUrl = `${getBaseUrl(req)}/hls/${encodeURIComponent(channel.id)}/${stableSourceIndex}/${sourceVersion}/index.m3u8`;
     res.type("html").send(renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPreviewUrl }));
   });
 
-  app.get("/stream/:channelId", (req, res, next) => {
+  app.get(["/stream/:channelId", "/stream/:channelId.m3u8", "/stream/:channelId.ts"], (req, res, next) => {
     try {
-      const channel = store.getChannel(req.params.channelId);
+      const channel = store.getChannel(normalizeChannelIdParam(req.params.channelId));
       if (!channel) {
         res.status(404).send("Channel not found");
         return;

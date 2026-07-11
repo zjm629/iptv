@@ -60,7 +60,7 @@ describe("server routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("application/x-mpegurl");
-    expect(response.text).toContain("http://vps.example:3080/play/cctv1.m3u8");
+    expect(response.text).toContain("http://vps.example:3080/stream/cctv1.m3u8");
   });
 
   test("returns generated source-selection playlist", async () => {
@@ -71,8 +71,8 @@ describe("server routes", () => {
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("application/x-mpegurl");
     expect(response.text.match(/,CCTV-1/g)).toHaveLength(2);
-    expect(response.text).toContain("http://vps.example:3080/play/cctv1.m3u8?source=0");
-    expect(response.text).toContain("http://vps.example:3080/play/cctv1.m3u8?source=1");
+    expect(response.text).toContain("http://vps.example:3080/stream/cctv1.m3u8?source=0");
+    expect(response.text).toContain("http://vps.example:3080/stream/cctv1.m3u8?source=1");
   });
 
   test("returns TVBox live txt with grouped channels and merged source links", async () => {
@@ -85,7 +85,7 @@ describe("server routes", () => {
     expect(response.text).toContain("推荐频道,#genre#");
     expect(response.text).toContain("央视频道,#genre#");
     expect(response.text).toContain(
-      "CCTV-1,http://vps.example:3080/play/cctv1.m3u8?source=0#http://vps.example:3080/play/cctv1.m3u8?source=1"
+      "CCTV-1,http://vps.example:3080/stream/cctv1.m3u8?source=0#http://vps.example:3080/stream/cctv1.m3u8?source=1"
     );
     expect(response.text).not.toContain("全部频道,#genre#");
     expect(response.text).not.toContain("CCTV,#genre#");
@@ -102,7 +102,7 @@ describe("server routes", () => {
     expect(response.text).toContain('#EXTM3U x-tvg-url="https://live.fanmingming.com/e.xml"');
     expect(response.text).toContain('#EXTINF:-1 tvg-name="CCTV-1" tvg-logo="https://logo.example/cctv.png" group-title="推荐频道",CCTV-1');
     expect(response.text).toContain(
-      "http://vps.example:3080/play/cctv1.m3u8?source=0#http://vps.example:3080/play/cctv1.m3u8?source=1"
+      "http://vps.example:3080/stream/cctv1.m3u8?source=0#http://vps.example:3080/stream/cctv1.m3u8?source=1"
     );
     expect(response.text).not.toContain("#genre#");
   });
@@ -326,7 +326,7 @@ describe("server routes", () => {
     await request(createApp(store)).get("/stream/cctv1?source=37").expect(404);
   });
 
-  test("uses ffmpeg hls preview for remote m3u8 source testing", async () => {
+  test("uses direct proxied hls for remote m3u8 source testing", async () => {
     const store = createFakeStore([
       {
         id: "cctv1",
@@ -343,10 +343,9 @@ describe("server routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.text).toContain("http://183.2.73.7:9901/tsfile/live/0001_1.m3u8?key=txiptv");
-    expect(response.text).toContain("const useHlsPreview = true");
-    expect(response.text).toContain("const useDirectHls = false");
-    expect(response.text).toContain("loadHlsPreview(hlsPreviewUrl");
-    expect(response.text).toContain("FFmpeg HLS");
+    expect(response.text).toContain("const useDirectHls = true");
+    expect(response.text).toContain("loadDirectHls(streamUrl");
+    expect(response.text).toContain("ffmpeg-preview");
     expect(response.text).toContain("liveSyncDurationCount: 5");
     expect(response.text).toContain("maxBufferLength: 30");
     expect(response.text).toContain("lowLatencyMode: false");
@@ -372,9 +371,12 @@ describe("server routes", () => {
       .set("Host", "vps.example:3080");
 
     expect(response.status).toBe(200);
-    expect(response.text).toContain("/stream/sc?source=0");
+    expect(response.text).toContain("/stream/sc.ts?source=0");
     expect(response.text).toMatch(/\/hls\/sc\/0\/[^/]+\/index\.m3u8/);
-    expect(response.text).toContain("FFmpeg HLS");
+    expect(response.text).toContain("mpegts.createPlayer");
+    expect(response.text).toContain("loadMpegTs");
+    expect(response.text).toContain("ffmpeg-preview");
+    expect(response.text).toContain("loadHlsPreview");
     expect(response.text).toContain("player-status");
     expect(response.text).toContain("start-overlay");
     expect(response.text).toContain("点击播放");
@@ -389,6 +391,35 @@ describe("server routes", () => {
     expect(response.text).toContain("tryAutoplay");
     expect(response.text).toContain("muted = false");
     expect(response.text).toContain("muted = true");
+  });
+
+  test("serves suffixed stream proxy urls for picky players", async () => {
+    const upstream = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "video/mp2t" });
+      res.end("stream-data");
+    });
+    await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const { port } = upstream.address();
+
+    try {
+      const store = createFakeStore([
+        {
+          id: "sc",
+          name: "SCTV",
+          sources: [
+            { sourceIndex: 0, sourceName: "RTP Proxy", url: `http://127.0.0.1:${port}/rtp/239.253.43.119:5146` }
+          ]
+        }
+      ]);
+
+      const response = await request(createApp(store)).get("/stream/sc.ts?source=0");
+
+      expect(response.status).toBe(200);
+      expect(response.headers["content-type"]).toContain("video/mp2t");
+      expect(Buffer.from(response.body).toString("utf8")).toBe("stream-data");
+    } finally {
+      await new Promise((resolve) => upstream.close(resolve));
+    }
   });
 
   test("uses source url version in hls preview links", async () => {
@@ -494,6 +525,47 @@ describe("server routes", () => {
       expect(segmentResponse.status).toBe(200);
       expect(segmentResponse.headers["content-type"]).toContain("video/mp2t");
       expect(Buffer.from(segmentResponse.body).toString("utf8")).toBe("segment-data");
+    } finally {
+      await new Promise((resolve) => upstream.close(resolve));
+    }
+  });
+
+  test("rewrites proxied m3u8 through suffixed stream endpoint", async () => {
+    const upstream = http.createServer((req, res) => {
+      if (req.url.startsWith("/live/index.m3u8")) {
+        res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl" });
+        res.end("#EXTM3U\n#EXTINF:5,\nsegment.ts\n");
+        return;
+      }
+      if (req.url.startsWith("/live/segment.ts")) {
+        res.writeHead(200, { "content-type": "video/mp2t" });
+        res.end("segment-data");
+        return;
+      }
+      res.writeHead(404);
+      res.end("missing");
+    });
+    await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const { port } = upstream.address();
+
+    try {
+      const store = createFakeStore([
+        {
+          id: "cctv1",
+          name: "CCTV1",
+          sources: [
+            { sourceIndex: 0, sourceName: "A", url: `http://127.0.0.1:${port}/live/index.m3u8` }
+          ]
+        }
+      ]);
+      const response = await request(createApp(store))
+        .get("/stream/cctv1.m3u8?source=0")
+        .set("Host", "vps.example:3080");
+
+      expect(response.status).toBe(200);
+      expect(response.headers["content-type"]).toContain("application/vnd.apple.mpegurl");
+      expect(response.text).toContain("/stream/cctv1?source=0&asset=");
+      expect(response.text).not.toContain("\nsegment.ts");
     } finally {
       await new Promise((resolve) => upstream.close(resolve));
     }

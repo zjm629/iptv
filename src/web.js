@@ -620,8 +620,8 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
     /\/(rtp|udp)\//i.test(rawUrl) ||
     lowerUrl.includes(".ts")
   );
-  const useDirectHls = false;
-  const useHlsPreview = likelyMpegTs || lowerUrl.includes(".m3u8");
+  const useDirectHls = lowerUrl.includes(".m3u8");
+  const useHlsPreview = false;
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -678,6 +678,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
       <button id="play-now">播放/继续</button>
       <button id="toggle-muted" class="secondary">静音</button>
       <button id="reload-stream" class="secondary">重试加载</button>
+      <button id="ffmpeg-preview" class="secondary">FFmpeg预览</button>
       <a href="${escapeHtmlValue(streamUrl || playUrl)}">打开代理流</a>
       <a href="${escapedRawUrl}">打开原始地址</a>
     </section>
@@ -708,6 +709,7 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
     const playNow = document.getElementById("play-now");
     const toggleMuted = document.getElementById("toggle-muted");
     const reloadStream = document.getElementById("reload-stream");
+    const ffmpegPreview = document.getElementById("ffmpeg-preview");
     const statusState = document.getElementById("status-state");
     const statusTime = document.getElementById("status-time");
     const statusBuffer = document.getElementById("status-buffer");
@@ -974,14 +976,20 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
     });
     reloadStream.addEventListener("click", () => {
       appendLog("手动重试加载");
-      if (useHlsPreview) {
-        loadHlsPreview(restartPreviewUrl(hlsPreviewUrl), "FFmpeg HLS 稳定预览");
+      if (likelyMpegTs) {
+        loadMpegTs();
       } else if (useDirectHls) {
         loadDirectHls(restartPreviewUrl(streamUrl), "代理 HLS 直连播放");
+      } else if (useHlsPreview) {
+        loadHlsPreview(restartPreviewUrl(hlsPreviewUrl), "FFmpeg HLS 稳定预览");
       } else {
         video.load();
         updateStartOverlay();
       }
+    });
+    ffmpegPreview.addEventListener("click", () => {
+      appendLog("手动切换 FFmpeg HLS 预览");
+      loadHlsPreview(restartPreviewUrl(hlsPreviewUrl), "FFmpeg HLS 稳定预览");
     });
 
     window.addEventListener("beforeunload", destroyTsPlayer);
@@ -993,6 +1001,8 @@ export function renderPlayerPage({ channel, source, playUrl, streamUrl, hlsPrevi
       setMessage("浏览器通常不能直接拉取 rtp://、udp://、rtsp://；如无法播放，请复制原始地址到电视端测试。");
     } else if (useDirectHls) {
       loadDirectHls(streamUrl, "代理 HLS 直连播放");
+    } else if (likelyMpegTs) {
+      loadMpegTs();
     } else if (useHlsPreview) {
       loadHlsPreview(hlsPreviewUrl, "FFmpeg HLS 稳定预览");
     } else {
