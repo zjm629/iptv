@@ -31,15 +31,15 @@ function isLikelyM3u8Url(value = "") {
   return String(value || "").toLowerCase().split("?")[0].endsWith(".m3u8");
 }
 
-function buildStreamUrl(channel, source, index, baseUrl) {
+function buildPlayUrl(channel, source, index, baseUrl) {
   const sourceIndex = source?.sourceIndex ?? index;
-  const suffix = isLikelyM3u8Url(source?.url) ? ".m3u8" : ".ts";
-  return `${baseUrl}/stream/${encodeURIComponent(channel.id)}${suffix}?source=${sourceIndex}`;
+  const suffix = isLikelyM3u8Url(source?.url) ? ".m3u8" : "";
+  return `${baseUrl}/play/${encodeURIComponent(channel.id)}${suffix}?source=${sourceIndex}`;
 }
 
 function buildPlayUrls(channel, baseUrl) {
   const sources = channel.sources?.length ? channel.sources : [{}];
-  return sources.map((source, index) => buildStreamUrl(channel, source, index, baseUrl));
+  return sources.map((source, index) => buildPlayUrl(channel, source, index, baseUrl));
 }
 
 function getChannelGroups(channel) {
@@ -112,7 +112,7 @@ export function generatePlaylist(channels, baseUrl) {
 
     lines.push(`#EXTINF:-1 ${attrs.join(" ")},${channel.name}`);
     const source = channel.sources?.[0] || {};
-    lines.push(buildStreamUrl(channel, source, channel.defaultSourceIndex ?? 0, cleanBaseUrl));
+    lines.push(buildPlayUrl(channel, source, channel.defaultSourceIndex ?? 0, cleanBaseUrl));
   }
 
   return `${lines.join("\n")}\n`;
@@ -139,7 +139,7 @@ export function generateSourcePlaylist(channels, baseUrl) {
       }
 
       lines.push(`#EXTINF:-1 ${attrs.join(" ")},${channel.name}`);
-      lines.push(buildStreamUrl(channel, sources[sourceIndex], sourceIndex, cleanBaseUrl));
+      lines.push(buildPlayUrl(channel, sources[sourceIndex], sourceIndex, cleanBaseUrl));
     }
   }
 
