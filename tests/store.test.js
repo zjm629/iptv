@@ -386,6 +386,57 @@ http://a.example/cctv3.m3u8
     expect(store.getChannels().map((channel) => channel.id)).toEqual(["cctv2", "cctv3", "cctv1"]);
   });
 
+  test("manual channel moves clear sort number so bottom move takes effect", async () => {
+    const { configPath, cachePath, overridesPath } = await createTempConfig([
+      { name: "Source A", url: "http://source-a.example/list.m3u" }
+    ]);
+    const fetchMock = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      text: async () => `#EXTM3U
+#EXTINF:-1,CCTV-1
+http://a.example/cctv1.m3u8
+#EXTINF:-1,CCTV-2
+http://a.example/cctv2.m3u8
+#EXTINF:-1,CCTV-3
+http://a.example/cctv3.m3u8
+`
+    });
+    const store = createStore({ configPath, cachePath, overridesPath, fetchImpl: fetchMock });
+    await store.load();
+    await store.refresh();
+    await store.saveChannelOverride("cctv1", { sortOrder: 1 });
+
+    await store.moveChannel("cctv1", "bottom");
+
+    expect(store.getChannels().map((channel) => [channel.id, channel.sortOrder])).toEqual([
+      ["cctv2", null],
+      ["cctv3", null],
+      ["cctv1", null]
+    ]);
+    expect(JSON.parse(await fs.readFile(overridesPath, "utf8")).channels.cctv1.sortOrder).toBeNull();
+  });
+
+  test("auto hides channels whose name is only a generated date timestamp", async () => {
+    const { configPath, cachePath, overridesPath } = await createTempConfig([
+      { name: "Source A", url: "http://source-a.example/list.m3u" }
+    ]);
+    const fetchMock = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      text: async () => `#EXTM3U
+#EXTINF:-1,2026-07-11 19:29:11
+http://a.example/generated.m3u8
+#EXTINF:-1,CCTV-1
+http://a.example/cctv1.m3u8
+`
+    });
+    const store = createStore({ configPath, cachePath, overridesPath, fetchImpl: fetchMock });
+    await store.load();
+    await store.refresh();
+
+    expect(store.getChannel("20260711192911")).toEqual(expect.objectContaining({ hidden: true }));
+    expect(store.getOutputChannels().map((channel) => channel.id)).toEqual(["cctv1"]);
+  });
+
   test("saves category list with recommended first", async () => {
     const { configPath, cachePath, overridesPath } = await createTempConfig([]);
     const store = createStore({ configPath, cachePath, overridesPath, fetchImpl: jest.fn() });
