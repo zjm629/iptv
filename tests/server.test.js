@@ -703,6 +703,7 @@ describe("server routes", () => {
     expect(response.headers["content-type"]).toContain("text/html");
     expect(response.text).toContain("IPTV M3U Manager");
     expect(response.text).toContain("source-editor");
+    expect(response.text).toContain("move-source");
     expect(response.text).toContain("playlist-sources.m3u");
     expect(response.text).toContain("live.txt");
     expect(response.text).toContain("live.m3u");
@@ -715,6 +716,8 @@ describe("server routes", () => {
     expect(response.text).toContain("设为默认");
     expect(response.text).toContain("置顶");
     expect(response.text).toContain("上移");
+    expect(response.text).toContain("置底");
+    expect(response.text).toContain("data-direction='bottom'");
     expect(response.text).not.toContain("playlist.json");
     expect(response.text).not.toContain("tvbox.json");
     expect(response.text).not.toContain("warehouse.json");

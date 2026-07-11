@@ -369,9 +369,14 @@ export function createStore(options = {}) {
         currentOrder.unshift(channelId);
       }
 
+      if (direction === "bottom" && index >= 0 && index < currentOrder.length - 1) {
+        currentOrder.splice(index, 1);
+        currentOrder.push(channelId);
+      }
+
       const delta = direction === "up" ? -1 : direction === "down" ? 1 : 0;
       const nextIndex = index + delta;
-      if (direction !== "top" && delta !== 0 && nextIndex >= 0 && nextIndex < currentOrder.length) {
+      if (!["top", "bottom"].includes(direction) && delta !== 0 && nextIndex >= 0 && nextIndex < currentOrder.length) {
         [currentOrder[index], currentOrder[nextIndex]] = [currentOrder[nextIndex], currentOrder[index]];
       }
 

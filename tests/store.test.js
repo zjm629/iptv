@@ -363,6 +363,29 @@ http://a.example/cctv1.m3u8
     });
   });
 
+  test("moves channel to bottom of configured order", async () => {
+    const { configPath, cachePath, overridesPath } = await createTempConfig([
+      { name: "Source A", url: "http://source-a.example/list.m3u" }
+    ]);
+    const fetchMock = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      text: async () => `#EXTM3U
+#EXTINF:-1,CCTV-1
+http://a.example/cctv1.m3u8
+#EXTINF:-1,CCTV-2
+http://a.example/cctv2.m3u8
+#EXTINF:-1,CCTV-3
+http://a.example/cctv3.m3u8
+`
+    });
+    const store = createStore({ configPath, cachePath, overridesPath, fetchImpl: fetchMock });
+    await store.load();
+    await store.refresh();
+
+    await expect(store.moveChannel("cctv1", "bottom")).resolves.toEqual(["cctv2", "cctv3", "cctv1"]);
+    expect(store.getChannels().map((channel) => channel.id)).toEqual(["cctv2", "cctv3", "cctv1"]);
+  });
+
   test("saves category list with recommended first", async () => {
     const { configPath, cachePath, overridesPath } = await createTempConfig([]);
     const store = createStore({ configPath, cachePath, overridesPath, fetchImpl: jest.fn() });

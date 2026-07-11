@@ -305,9 +305,37 @@ export function renderHomePage() {
         "<div class='source-row' data-index='" + index + "'>" +
         "<input class='source-name' placeholder='名称，可留空' value='" + escapeHtml(source.name) + "'>" +
         "<input class='source-url' placeholder='M3U 地址，例如 https://example.com/list.m3u' value='" + escapeHtml(source.url) + "'>" +
+        "<span class='source-actions'>" +
+        "<button class='linklike move-source' data-index='" + index + "' data-direction='top' " + (index === 0 ? "disabled" : "") + ">置顶</button>" +
+        "<button class='linklike move-source' data-index='" + index + "' data-direction='up' " + (index === 0 ? "disabled" : "") + ">上移</button>" +
+        "<button class='linklike move-source' data-index='" + index + "' data-direction='down' " + (index === rows.length - 1 ? "disabled" : "") + ">下移</button>" +
+        "<button class='linklike move-source' data-index='" + index + "' data-direction='bottom' " + (index === rows.length - 1 ? "disabled" : "") + ">置底</button>" +
         "<button class='danger remove-source' data-index='" + index + "'>删除</button>" +
+        "</span>" +
         "</div>"
       ).join("");
+      document.querySelectorAll(".move-source").forEach((button) => {
+        button.addEventListener("click", () => {
+          syncSourcesFromInputs();
+          const index = Number(button.dataset.index);
+          if (button.dataset.direction === "top" && index > 0) {
+            state.sources.unshift(...state.sources.splice(index, 1));
+            renderSources();
+            return;
+          }
+          if (button.dataset.direction === "bottom" && index < state.sources.length - 1) {
+            state.sources.push(...state.sources.splice(index, 1));
+            renderSources();
+            return;
+          }
+          const target = button.dataset.direction === "up" ? index - 1 : index + 1;
+          if (target < 0 || target >= state.sources.length) {
+            return;
+          }
+          [state.sources[index], state.sources[target]] = [state.sources[target], state.sources[index]];
+          renderSources();
+        });
+      });
       document.querySelectorAll(".remove-source").forEach((button) => {
         button.addEventListener("click", () => {
           syncSourcesFromInputs();
@@ -324,8 +352,10 @@ export function renderHomePage() {
         "<input class='category-name' value='" + escapeHtml(category) + "' " + (index === 0 ? "readonly" : "") + ">" +
         "<span class='muted'>" + (index === 0 ? "默认打开" : "自定义分类") + "</span>" +
         "<span class='category-actions'>" +
+        "<button class='linklike move-category' data-index='" + index + "' data-direction='top' " + (index <= 1 ? "disabled" : "") + ">置顶</button>" +
         "<button class='linklike move-category' data-index='" + index + "' data-direction='up' " + (index <= 1 ? "disabled" : "") + ">上移</button>" +
         "<button class='linklike move-category' data-index='" + index + "' data-direction='down' " + (index === 0 || index === rows.length - 1 ? "disabled" : "") + ">下移</button>" +
+        "<button class='linklike move-category' data-index='" + index + "' data-direction='bottom' " + (index === 0 || index === rows.length - 1 ? "disabled" : "") + ">置底</button>" +
         "<button class='danger remove-category' data-index='" + index + "' " + (index === 0 ? "disabled" : "") + ">删除</button>" +
         "</span>" +
         "</div>"
@@ -334,6 +364,18 @@ export function renderHomePage() {
         button.addEventListener("click", () => {
           syncCategoriesFromInputs();
           const index = Number(button.dataset.index);
+          if (button.dataset.direction === "top" && index > 1) {
+            state.categories.splice(1, 0, ...state.categories.splice(index, 1));
+            renderCategories();
+            renderChannels();
+            return;
+          }
+          if (button.dataset.direction === "bottom" && index > 0 && index < state.categories.length - 1) {
+            state.categories.push(...state.categories.splice(index, 1));
+            renderCategories();
+            renderChannels();
+            return;
+          }
           const target = button.dataset.direction === "up" ? index - 1 : index + 1;
           if (index <= 0 || target <= 0 || target >= state.categories.length) {
             return;
@@ -386,6 +428,7 @@ export function renderHomePage() {
         "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='top'>置顶</button>" +
         "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='up'>上移</button>" +
         "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='down'>下移</button>" +
+        "<button class='linklike move-channel' data-id='" + escapeHtml(channel.id) + "' data-direction='bottom'>置底</button>" +
         "<button class='" + (channel.hidden ? "secondary" : "danger") + " toggle-channel' data-id='" + escapeHtml(channel.id) + "' data-hidden='" + (!channel.hidden) + "'>" +
         (channel.hidden ? "恢复" : "隐藏") + "</button>" +
         "</span></summary><div class='lines'>" +
