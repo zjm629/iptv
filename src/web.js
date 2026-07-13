@@ -875,7 +875,7 @@ export function renderCollectorPage() {
       <h2>采集设置</h2>
       <div class="collector-grid">
         <input id="collector-page-url" value="https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1">
-        <input id="collector-max-pages" type="number" min="1" max="20" step="1" value="10">
+        <input id="collector-max-pages" type="number" min="1" max="20" step="1" value="2">
       </div>
       <input id="collector-keywords" value="电信" placeholder="关键词，多个用逗号分隔">
       <div class="actions">
@@ -911,14 +911,17 @@ export function renderCollectorPage() {
         enabled: true,
         pageUrl: $("collector-page-url").value.trim(),
         keywords: $("collector-keywords").value.split(/[,，\\n]/).map((item) => item.trim()).filter(Boolean),
-        maxPages: Number($("collector-max-pages").value || 10),
+        maxPages: Number($("collector-max-pages").value || 2),
         todayOnly: true,
         onlyStatus: "新上线",
         uniqueByType: false,
         resolveDetailUrls: true,
-        pageDelayMs: 5000,
-        rateLimitDelayMs: 10000,
-        rateLimitRetries: 1
+        pageDelayMs: 8000,
+        rateLimitDelayMs: 15000,
+        rateLimitRetries: 1,
+        detailDelayMs: 1500,
+        detailRetryDelayMs: 6000,
+        detailRetries: 1
       };
     }
 
@@ -960,7 +963,7 @@ export function renderCollectorPage() {
 
     $("preview").addEventListener("click", async () => {
       $("preview").disabled = true;
-      $("message").textContent = "采集中... 正在逐条进入详情页提取真实 M3U，网站限速时会稍等重试。";
+      $("message").textContent = "慢速精采中... 正在逐条进入详情页提取真实 M3U，取不到会稍等后重试一次。";
       try {
         const result = await postJson("/api/auto-sources/discover", configFromForm());
         renderDiscovery(result);

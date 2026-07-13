@@ -72,6 +72,9 @@ function normalizeAutoSourceConfig(value = {}) {
     pageDelayMs: parseBoundedInteger(value.pageDelayMs ?? "1500", 1500, 0, 5000),
     rateLimitRetries: parseBoundedInteger(value.rateLimitRetries ?? "2", 2, 0, 5),
     rateLimitDelayMs: parseBoundedInteger(value.rateLimitDelayMs ?? "5000", 5000, 0, 30000),
+    detailDelayMs: parseBoundedInteger(value.detailDelayMs ?? "1200", 1200, 0, 10000),
+    detailRetries: parseBoundedInteger(value.detailRetries ?? "1", 1, 0, 3),
+    detailRetryDelayMs: parseBoundedInteger(value.detailRetryDelayMs ?? "5000", 5000, 0, 30000),
     resolveDetailUrls: value.resolveDetailUrls !== false
   };
 }
@@ -270,6 +273,21 @@ async function ensureAdVerification(fetchImpl, pageUrl, requestConfig) {
   }
 }
 
+async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl) {
+  const detailUrl = buildDetailUrl(requestConfig.pageUrl, row);
+  for (let attempt = 0; attempt <= requestConfig.detailRetries; attempt += 1) {
+    if (attempt > 0 && requestConfig.detailRetryDelayMs > 0) {
+      await sleepImpl(requestConfig.detailRetryDelayMs * attempt);
+    }
+    const detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig);
+    const detailM3uUrl = detail.response.ok ? parseDetailM3uUrl(detail.html, requestConfig.pageUrl) : "";
+    if (detailM3uUrl) {
+      return detailM3uUrl;
+    }
+  }
+  return "";
+}
+
 function filterRows(rows, config, now = new Date()) {
   const today = todayInShanghai(now);
   const seenTypes = new Set();
@@ -365,12 +383,15 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
   }
   const sources = [];
   let skippedWithoutDetailUrl = 0;
+  let detailIndex = 0;
   for (const row of selectedRows) {
     let sourceUrl = buildM3uUrl(config.pageUrl, row);
     if (config.resolveDetailUrls) {
-      const detailUrl = buildDetailUrl(config.pageUrl, row);
-      const detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig);
-      const detailM3uUrl = detail.response.ok ? parseDetailM3uUrl(detail.html, config.pageUrl) : "";
+      if (detailIndex > 0 && config.detailDelayMs > 0) {
+        await sleepImpl(config.detailDelayMs);
+      }
+      detailIndex += 1;
+      const detailM3uUrl = await resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl);
       if (detailM3uUrl) {
         sourceUrl = detailM3uUrl;
       } else {

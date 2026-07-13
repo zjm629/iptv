@@ -300,7 +300,8 @@ describe("auto source discovery", () => {
       enabled: true,
       pageUrl: "https://iptv.cqshushu.com/index.php",
       keywords: ["电信"],
-      maxPages: 1
+      maxPages: 1,
+      detailRetries: 0
     }, {
       fetchImpl: fetchMock,
       now: new Date("2026-07-13T12:00:00+08:00")
@@ -308,6 +309,54 @@ describe("auto source discovery", () => {
 
     expect(result.sources).toEqual([]);
     expect(result.warnings).toEqual(["已跳过 1 个未取到真实 M3U 的源。"]);
+  });
+
+  test("retries a detail page that does not expose a real m3u token at first", async () => {
+    const waits = [];
+    let detailRequests = 0;
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("?p=top-sichuan&t=multicast")) {
+        detailRequests += 1;
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => detailRequests === 1
+            ? "<html>checking</html>"
+            : '<a href="?s=retry-real-sichuan&t=multicast">M3U接口</a>'
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => SAMPLE_HTML
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: ["电信"],
+      maxPages: 1,
+      detailRetryDelayMs: 4321
+    }, {
+      fetchImpl: fetchMock,
+      sleepImpl: async (ms) => waits.push(ms),
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(waits).toEqual([4321]);
+    expect(result.warnings).toEqual([]);
+    expect(result.sources[0].url).toBe("https://iptv.cqshushu.com/index.php?s=retry-real-sichuan&t=multicast&channels=1&format=m3u");
   });
 
   test("retries a rate-limited discovery page before giving up", async () => {
