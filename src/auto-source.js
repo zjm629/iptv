@@ -364,6 +364,7 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
     await ensureAdVerification(fetchImpl, config.pageUrl, requestConfig);
   }
   const sources = [];
+  let skippedWithoutDetailUrl = 0;
   for (const row of selectedRows) {
     let sourceUrl = buildM3uUrl(config.pageUrl, row);
     if (config.resolveDetailUrls) {
@@ -373,7 +374,8 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
       if (detailM3uUrl) {
         sourceUrl = detailM3uUrl;
       } else {
-        warnings.push(`详情页未取到 ${row.typeName} 的真实 M3U 地址，已使用列表地址兜底。`);
+        skippedWithoutDetailUrl += 1;
+        continue;
       }
     }
     sources.push({
@@ -384,6 +386,9 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
       updatedAt: row.updatedAt,
       status: row.status
     });
+  }
+  if (skippedWithoutDetailUrl > 0) {
+    warnings.push(`已跳过 ${skippedWithoutDetailUrl} 个未取到真实 M3U 的源。`);
   }
 
   return { config, sources, rows: selectedRows, pages, warnings };
