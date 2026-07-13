@@ -134,6 +134,35 @@ describe("auto source discovery", () => {
     expect(requestedUrls).toEqual(["https://iptv.cqshushu.com/index.php"]);
   });
 
+  test("collects from the configured start page", async () => {
+    const requestedUrls = [];
+    const fetchMock = async (url) => {
+      requestedUrls.push(url);
+      return {
+        ok: true,
+        text: async () => url.includes("page=4") ? SAMPLE_HTML : `${SAMPLE_HTML}下一页`
+      };
+    };
+
+    await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1",
+      keywords: ["电信"],
+      startPage: 3,
+      maxPages: 2,
+      resolveDetailUrls: false
+    }, {
+      fetchImpl: fetchMock,
+      sleepImpl: async () => {},
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(requestedUrls).toEqual([
+      "https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1&page=3",
+      "https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1&page=4"
+    ]);
+  });
+
   test("falls back to the base index page when filtered search urls are blocked", async () => {
     const requestedUrls = [];
     const fetchMock = async (url) => {

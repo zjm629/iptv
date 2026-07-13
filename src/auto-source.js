@@ -68,6 +68,7 @@ function normalizeAutoSourceConfig(value = {}) {
     todayOnly: value.todayOnly !== false,
     onlyStatus: String(value.onlyStatus || "新上线").trim(),
     uniqueByType: value.uniqueByType !== false,
+    startPage: parseBoundedInteger(value.startPage ?? "1", 1, 1, 200),
     maxPages: parseBoundedInteger(value.maxPages ?? "20", 20, 1, 20),
     pageDelayMs: parseBoundedInteger(value.pageDelayMs ?? "1500", 1500, 0, 5000),
     rateLimitRetries: parseBoundedInteger(value.rateLimitRetries ?? "2", 2, 0, 5),
@@ -338,8 +339,9 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
   const cookieJar = createCookieJar();
   const requestConfig = { ...config, cookieJar };
 
-  for (let page = 1; page <= config.maxPages; page += 1) {
-    if (page > 1 && config.pageDelayMs > 0) {
+  const endPage = config.startPage + config.maxPages - 1;
+  for (let page = config.startPage; page <= endPage; page += 1) {
+    if (page > config.startPage && config.pageDelayMs > 0) {
       await sleepImpl(config.pageDelayMs);
     }
     const url = buildPageUrl(useFallbackBase ? buildBaseIndexUrl(config.pageUrl) : config.pageUrl, page);

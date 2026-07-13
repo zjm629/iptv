@@ -829,9 +829,15 @@ export function renderCollectorPage() {
     }
     .collector-grid {
       display: grid;
-      grid-template-columns: 1fr minmax(100px, 140px);
+      grid-template-columns: 1fr minmax(100px, 140px) minmax(100px, 140px);
       gap: 10px;
       margin-bottom: 10px;
+    }
+    .collector-field {
+      display: grid;
+      gap: 4px;
+      color: var(--muted);
+      font-size: 12px;
     }
     .actions, .result-actions {
       display: flex;
@@ -874,8 +880,9 @@ export function renderCollectorPage() {
     <section class="panel">
       <h2>采集设置</h2>
       <div class="collector-grid">
-        <input id="collector-page-url" value="https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1">
-        <input id="collector-max-pages" type="number" min="1" max="20" step="1" value="2">
+        <label class="collector-field">采集页面<input id="collector-page-url" value="https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1"></label>
+        <label class="collector-field">起始页<input id="collector-start-page" type="number" min="1" max="200" step="1" value="1"></label>
+        <label class="collector-field">采集页数<input id="collector-max-pages" type="number" min="1" max="20" step="1" value="2"></label>
       </div>
       <input id="collector-keywords" value="电信" placeholder="关键词，多个用逗号分隔">
       <div class="actions">
@@ -911,6 +918,7 @@ export function renderCollectorPage() {
         enabled: true,
         pageUrl: $("collector-page-url").value.trim(),
         keywords: $("collector-keywords").value.split(/[,，\\n]/).map((item) => item.trim()).filter(Boolean),
+        startPage: Number($("collector-start-page").value || 1),
         maxPages: Number($("collector-max-pages").value || 2),
         todayOnly: true,
         onlyStatus: "新上线",
