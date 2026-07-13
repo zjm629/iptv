@@ -240,6 +240,30 @@ http://www.tyio.cc:8188/rtp/239.77.0.168:5146
     ]);
   });
 
+  test("automatically hides channels whose names end with SD", async () => {
+    const { configPath, cachePath } = await createTempConfig([
+      { name: "Source A", url: "http://source-a.example/list.m3u" }
+    ]);
+    const fetchMock = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      text: async () => `#EXTM3U
+#EXTINF:-1 group-title="上海频道",上海都市SD
+http://a.example/shanghai-sd.m3u8
+#EXTINF:-1 group-title="卫视",湖南卫视
+http://a.example/hunan.m3u8
+`
+    });
+
+    const store = createStore({ configPath, cachePath, fetchImpl: fetchMock });
+    await store.refresh();
+
+    expect(store.getChannel("上海都市sd")).toEqual(expect.objectContaining({
+      name: "上海都市SD",
+      hidden: true
+    }));
+    expect(store.getOutputChannels().map((channel) => channel.name)).toEqual(["湖南卫视"]);
+  });
+
   test("preserves first-seen channel order across sources", async () => {
     const { configPath, cachePath } = await createTempConfig([
       { name: "Source A", url: "http://source-a.example/list.m3u" },

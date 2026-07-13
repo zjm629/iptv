@@ -229,6 +229,10 @@ function isGeneratedDateChannelName(name) {
   return /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?$/.test(String(name || "").trim());
 }
 
+function isLowQualitySdChannelName(name) {
+  return /SD$/i.test(String(name || "").trim());
+}
+
 export function createStore(options = {}) {
   const configPath = options.configPath || process.env.SOURCES_PATH || path.join(process.cwd(), "config", "sources.json");
   const cachePath = options.cachePath || process.env.CACHE_PATH || path.join(process.cwd(), "data", "cache.json");
@@ -244,7 +248,7 @@ export function createStore(options = {}) {
 
   function decorateChannel(channel) {
     const override = normalizeOverride(overrides.channels[channel.id]);
-    const autoHidden = isGeneratedDateChannelName(channel.name);
+    const autoHidden = isGeneratedDateChannelName(channel.name) || isLowQualitySdChannelName(channel.name);
     const disabledUrls = new Set(override.disabledSourceUrls);
     const decoratedSources = channel.sources.map((source, index) => ({
       ...source,
