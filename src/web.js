@@ -50,7 +50,7 @@ export function renderHomePage() {
       gap: 16px;
       padding: 20px clamp(16px, 4vw, 40px) 40px;
     }
-    .toolbar, .status, .channel, .source-editor, .category-editor {
+    .toolbar, .status, .channel, .source-editor, .auto-source-editor, .category-editor {
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -105,11 +105,42 @@ export function renderHomePage() {
       gap: 10px;
       margin-bottom: 12px;
     }
+    .source-row.hidden {
+      opacity: 0.62;
+    }
+    .source-row.hidden .source-name,
+    .source-row.hidden .source-url {
+      text-decoration: line-through;
+      color: var(--muted);
+    }
     .source-row, .category-row {
       display: grid;
       grid-template-columns: minmax(140px, 220px) 1fr auto;
       gap: 10px;
       align-items: center;
+    }
+    .auto-source-grid {
+      display: grid;
+      grid-template-columns: minmax(180px, 260px) 1fr minmax(100px, 140px);
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .auto-source-preview {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .auto-source-preview-row {
+      display: grid;
+      grid-template-columns: minmax(180px, 280px) 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+      overflow-wrap: anywhere;
+      color: var(--muted);
+      font-size: 14px;
     }
     .source-actions, .category-actions, .channel-actions, .line-actions {
       display: flex;
@@ -206,7 +237,7 @@ export function renderHomePage() {
       font-size: 12px;
     }
     @media (max-width: 860px) {
-      header, .toolbar, .source-row, .line {
+      header, .toolbar, .source-row, .auto-source-grid, .auto-source-preview-row, .line {
         grid-template-columns: 1fr;
         align-items: stretch;
       }
@@ -234,6 +265,21 @@ export function renderHomePage() {
         <span class="muted" id="source-message"></span>
       </div>
     </section>
+    <section class="auto-source-editor">
+      <h2>自动采集</h2>
+      <div class="auto-source-grid">
+        <label class="category-option"><input class="category-checkbox" id="auto-source-enabled" type="checkbox">启用自动采集</label>
+        <input id="auto-source-page-url" placeholder="采集网页，例如 https://iptv.cqshushu.com/index.php">
+        <input id="auto-source-max-pages" type="number" min="1" max="20" step="1" placeholder="页数">
+      </div>
+      <input id="auto-source-keywords" placeholder="关键词，多个用逗号分隔，例如 电信">
+      <div class="source-actions" style="margin-top: 12px;">
+        <button class="secondary" id="preview-auto-sources">预览自动采集</button>
+        <button id="save-auto-sources">保存自动采集</button>
+        <span class="muted" id="auto-source-message"></span>
+      </div>
+      <div class="auto-source-preview" id="auto-source-preview"></div>
+    </section>
     <section class="category-editor">
       <h2>分类</h2>
       <div class="category-list" id="categories"></div>
@@ -255,7 +301,20 @@ export function renderHomePage() {
     <section class="channels" id="channels"></section>
   </main>
   <script>
-    const state = { channels: [], status: null, sources: [], categories: [] };
+    const state = {
+      channels: [],
+      status: null,
+      sources: [],
+      categories: [],
+      autoSourceConfig: {
+        enabled: false,
+        pageUrl: "https://iptv.cqshushu.com/index.php",
+        keywords: ["电信"],
+        disabledTypeNames: [],
+        maxPages: 20
+      },
+      autoSourcePreview: []
+    };
     const $ = (id) => document.getElementById(id);
 
     function escapeHtml(value) {
@@ -291,6 +350,8 @@ export function renderHomePage() {
       $("status").innerHTML =
         "<strong>频道：</strong>" + status.channelCount +
         " <strong>源：</strong>" + status.sourceCount +
+        " <strong>手动：</strong>" + (status.manualSourceCount ?? state.sources.length) +
+        " <strong>自动：</strong>" + (status.autoSourceCount ?? 0) +
         " <strong>刷新中：</strong>" + (status.refreshing ? "是" : "否") +
         "<div>" + status.sources.map((source) =>
           "<div class='" + (source.ok ? "source-ok" : "source-bad") + "'>" +
@@ -300,20 +361,30 @@ export function renderHomePage() {
     }
 
     function renderSources() {
-      const rows = state.sources.length ? state.sources : [{ name: "", url: "" }];
+      const rows = state.sources.length ? state.sources : [{ name: "", url: "", hidden: false }];
       $("sources").innerHTML = rows.map((source, index) =>
-        "<div class='source-row' data-index='" + index + "'>" +
+        "<div class='source-row " + (source.hidden ? "hidden" : "") + "' data-index='" + index + "' data-hidden='" + Boolean(source.hidden) + "'>" +
         "<input class='source-name' placeholder='名称，可留空' value='" + escapeHtml(source.name) + "'>" +
         "<input class='source-url' placeholder='M3U 地址，例如 https://example.com/list.m3u' value='" + escapeHtml(source.url) + "'>" +
         "<span class='source-actions'>" +
+        (source.hidden ? "<span class='badge'>已隐藏</span>" : "") +
         "<button class='linklike move-source' data-index='" + index + "' data-direction='top' " + (index === 0 ? "disabled" : "") + ">置顶</button>" +
         "<button class='linklike move-source' data-index='" + index + "' data-direction='up' " + (index === 0 ? "disabled" : "") + ">上移</button>" +
         "<button class='linklike move-source' data-index='" + index + "' data-direction='down' " + (index === rows.length - 1 ? "disabled" : "") + ">下移</button>" +
         "<button class='linklike move-source' data-index='" + index + "' data-direction='bottom' " + (index === rows.length - 1 ? "disabled" : "") + ">置底</button>" +
+        "<button class='secondary toggle-source-hidden' data-index='" + index + "'>" + (source.hidden ? "恢复" : "隐藏") + "</button>" +
         "<button class='danger remove-source' data-index='" + index + "'>删除</button>" +
         "</span>" +
         "</div>"
       ).join("");
+      document.querySelectorAll(".toggle-source-hidden").forEach((button) => {
+        button.addEventListener("click", () => {
+          syncSourcesFromInputs();
+          const index = Number(button.dataset.index);
+          state.sources[index].hidden = !state.sources[index].hidden;
+          renderSources();
+        });
+      });
       document.querySelectorAll(".move-source").forEach((button) => {
         button.addEventListener("click", () => {
           syncSourcesFromInputs();
@@ -341,6 +412,58 @@ export function renderHomePage() {
           syncSourcesFromInputs();
           state.sources.splice(Number(button.dataset.index), 1);
           renderSources();
+        });
+      });
+    }
+
+    function autoSourceConfigFromForm() {
+      return {
+        ...state.autoSourceConfig,
+        enabled: $("auto-source-enabled").checked,
+        pageUrl: $("auto-source-page-url").value.trim(),
+        keywords: $("auto-source-keywords").value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean),
+        maxPages: Number($("auto-source-max-pages").value || 20),
+        todayOnly: true,
+        onlyStatus: "新上线",
+        uniqueByType: true,
+        disabledTypeNames: Array.from(new Set(state.autoSourceConfig.disabledTypeNames || []))
+      };
+    }
+
+    function renderAutoSources() {
+      const config = state.autoSourceConfig || {};
+      $("auto-source-enabled").checked = Boolean(config.enabled);
+      $("auto-source-page-url").value = config.pageUrl || "https://iptv.cqshushu.com/index.php";
+      $("auto-source-keywords").value = (config.keywords || ["电信"]).join(", ");
+      $("auto-source-max-pages").value = config.maxPages || 20;
+
+      const disabled = new Set(config.disabledTypeNames || []);
+      const previewRows = state.autoSourcePreview || [];
+      $("auto-source-preview").innerHTML = previewRows.length
+        ? previewRows.map((source) =>
+          "<div class='auto-source-preview-row'>" +
+          "<strong>" + escapeHtml(source.typeName || source.name) + "</strong>" +
+          "<span>" + escapeHtml(source.url || "") + (source.updatedAt ? " · " + escapeHtml(source.updatedAt) : "") + "</span>" +
+          "<span class='source-actions'>" +
+          (disabled.has(source.typeName) ? "<span class='badge'>已隐藏</span>" : "") +
+          "<button class='" + (disabled.has(source.typeName) ? "secondary" : "danger") + " toggle-auto-source-type' data-type='" + escapeHtml(source.typeName || "") + "'>" +
+          (disabled.has(source.typeName) ? "恢复" : "隐藏") + "</button>" +
+          "</span></div>"
+        ).join("")
+        : "<div class='muted'>预览后会显示当天新上线的电信源；同类型只保留网页最前面的一条。</div>";
+
+      document.querySelectorAll(".toggle-auto-source-type").forEach((button) => {
+        button.addEventListener("click", () => {
+          state.autoSourceConfig = autoSourceConfigFromForm();
+          const typeName = button.dataset.type;
+          const nextDisabled = new Set(state.autoSourceConfig.disabledTypeNames || []);
+          if (nextDisabled.has(typeName)) {
+            nextDisabled.delete(typeName);
+          } else if (typeName) {
+            nextDisabled.add(typeName);
+          }
+          state.autoSourceConfig.disabledTypeNames = Array.from(nextDisabled);
+          renderAutoSources();
         });
       });
     }
@@ -398,7 +521,8 @@ export function renderHomePage() {
     function syncSourcesFromInputs() {
       state.sources = Array.from(document.querySelectorAll(".source-row")).map((row) => ({
         name: row.querySelector(".source-name").value.trim(),
-        url: row.querySelector(".source-url").value.trim()
+        url: row.querySelector(".source-url").value.trim(),
+        hidden: row.dataset.hidden === "true"
       }));
     }
 
@@ -520,18 +644,21 @@ export function renderHomePage() {
     }
 
     async function load() {
-      const [status, channels, sources, categories] = await Promise.all([
+      const [status, channels, sources, categories, autoSourceConfig] = await Promise.all([
         fetch("/api/status").then((response) => response.json()),
         fetch("/api/channels").then((response) => response.json()),
         fetch("/api/sources").then((response) => response.json()),
-        fetch("/api/categories").then((response) => response.json())
+        fetch("/api/categories").then((response) => response.json()),
+        fetch("/api/auto-sources").then((response) => response.json())
       ]);
       state.status = status;
       state.channels = channels;
       state.sources = sources;
       state.categories = categories;
+      state.autoSourceConfig = autoSourceConfig;
       renderStatus();
       renderSources();
+      renderAutoSources();
       renderCategories();
       renderChannels();
     }
@@ -539,7 +666,7 @@ export function renderHomePage() {
     $("search").addEventListener("input", renderChannels);
     $("add-source").addEventListener("click", () => {
       syncSourcesFromInputs();
-      state.sources.push({ name: "", url: "" });
+      state.sources.push({ name: "", url: "", hidden: false });
       renderSources();
     });
     $("add-category").addEventListener("click", () => {
@@ -589,6 +716,46 @@ export function renderHomePage() {
       $("source-message").textContent = "已保存并刷新";
       await load();
       $("save-sources").disabled = false;
+    });
+    $("preview-auto-sources").addEventListener("click", async () => {
+      state.autoSourceConfig = autoSourceConfigFromForm();
+      $("preview-auto-sources").disabled = true;
+      $("auto-source-message").textContent = "预览中...";
+      const response = await fetch("/api/auto-sources/discover", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...state.autoSourceConfig, enabled: true })
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        $("auto-source-message").textContent = result.error || "预览失败";
+        $("preview-auto-sources").disabled = false;
+        return;
+      }
+      state.autoSourcePreview = result.sources || [];
+      $("auto-source-message").textContent = "预览到 " + state.autoSourcePreview.length + " 个自动源";
+      renderAutoSources();
+      $("preview-auto-sources").disabled = false;
+    });
+    $("save-auto-sources").addEventListener("click", async () => {
+      state.autoSourceConfig = autoSourceConfigFromForm();
+      $("save-auto-sources").disabled = true;
+      $("auto-source-message").textContent = "保存中...";
+      const response = await fetch("/api/auto-sources", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(state.autoSourceConfig)
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        $("auto-source-message").textContent = result.error || "保存失败";
+        $("save-auto-sources").disabled = false;
+        return;
+      }
+      state.autoSourceConfig = result.config;
+      $("auto-source-message").textContent = "已保存并刷新";
+      await load();
+      $("save-auto-sources").disabled = false;
     });
     $("copy").addEventListener("click", async () => {
       await navigator.clipboard.writeText(new URL("/live.txt", location.href).href);

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { discoverAutoSources as discoverAutoSourcesFromPage, normalizeAutoSourceConfig } from "./auto-source.js";
 import { parseM3u } from "./m3u.js";
 import { normalizeChannelName } from "./normalize.js";
 
@@ -36,6 +37,10 @@ function createInitialOverrides() {
     order: [],
     categories: ["推荐频道"]
   };
+}
+
+function createInitialAutoSourceConfig() {
+  return normalizeAutoSourceConfig({ enabled: false, keywords: ["电信"] });
 }
 
 function normalizeOverride(value = {}) {
@@ -105,7 +110,7 @@ function normalizeSources(sources) {
       throw new Error("Source URL is required");
     }
 
-    return { name, url };
+    return { name, url, hidden: Boolean(source?.hidden) };
   });
 }
 
@@ -204,9 +209,12 @@ export function createStore(options = {}) {
   const configPath = options.configPath || process.env.SOURCES_PATH || path.join(process.cwd(), "config", "sources.json");
   const cachePath = options.cachePath || process.env.CACHE_PATH || path.join(process.cwd(), "data", "cache.json");
   const overridesPath = options.overridesPath || process.env.OVERRIDES_PATH || path.join(process.cwd(), "config", "channel-overrides.json");
+  const autoSourcesPath = options.autoSourcesPath || process.env.AUTO_SOURCES_PATH || path.join(process.cwd(), "config", "auto-sources.json");
   const fetchImpl = options.fetchImpl || globalThis.fetch;
+  const now = options.now;
   let channels = [];
   let overrides = createInitialOverrides();
+  let autoSourceConfig = createInitialAutoSourceConfig();
   let status = createInitialStatus();
   let refreshPromise = null;
 
@@ -239,9 +247,18 @@ export function createStore(options = {}) {
     overrides = normalizeOverrides(await readJson(overridesPath, createInitialOverrides()));
   }
 
+  async function loadAutoSourceConfig() {
+    autoSourceConfig = normalizeAutoSourceConfig(await readJson(autoSourcesPath, createInitialAutoSourceConfig()));
+  }
+
   async function persistOverrides() {
     await fs.mkdir(path.dirname(overridesPath), { recursive: true });
     await fs.writeFile(overridesPath, `${JSON.stringify(overrides, null, 2)}\n`, "utf8");
+  }
+
+  async function persistAutoSourceConfig() {
+    await fs.mkdir(path.dirname(autoSourcesPath), { recursive: true });
+    await fs.writeFile(autoSourcesPath, `${JSON.stringify(autoSourceConfig, null, 2)}\n`, "utf8");
   }
 
   async function loadCache() {
@@ -265,9 +282,27 @@ export function createStore(options = {}) {
 
   async function runRefresh() {
     status = { ...status, refreshing: true };
-    const configuredSources = await readSources(configPath);
+    const manualSources = await readSources(configPath);
+    const activeManualSources = manualSources.filter((source) => !source.hidden);
+    let configuredSources = activeManualSources;
+    let autoDiscovery = null;
     const entries = [];
     const sourceStatuses = [];
+
+    if (autoSourceConfig.enabled) {
+      try {
+        autoDiscovery = await discoverAutoSourcesFromPage(autoSourceConfig, { fetchImpl, now });
+        configuredSources = [...activeManualSources, ...autoDiscovery.sources];
+      } catch (error) {
+        sourceStatuses.push({
+          name: "自动采集",
+          url: autoSourceConfig.pageUrl,
+          ok: false,
+          channels: 0,
+          error: error.message
+        });
+      }
+    }
 
     for (const source of configuredSources) {
       try {
@@ -283,7 +318,8 @@ export function createStore(options = {}) {
           name: source.name || source.url,
           url: source.url,
           ok: true,
-          channels: parsed.length
+          channels: parsed.length,
+          auto: Boolean(source.auto)
         });
       } catch (error) {
         sourceStatuses.push({
@@ -291,6 +327,7 @@ export function createStore(options = {}) {
           url: source.url,
           ok: false,
           channels: 0,
+          auto: Boolean(source.auto),
           error: error.message
         });
       }
@@ -306,6 +343,8 @@ export function createStore(options = {}) {
         refreshing: false,
         channelCount: channels.length,
         sourceCount: configuredSources.length,
+        manualSourceCount: manualSources.length,
+        autoSourceCount: autoDiscovery?.sources.length || 0,
         sources: sourceStatuses
       };
       await persistCache();
@@ -318,6 +357,8 @@ export function createStore(options = {}) {
       refreshing: false,
       channelCount: channels.length,
       sourceCount: configuredSources.length,
+      manualSourceCount: manualSources.length,
+      autoSourceCount: autoDiscovery?.sources.length || 0,
       sources: sourceStatuses
     };
 
@@ -328,6 +369,7 @@ export function createStore(options = {}) {
     async load() {
       await loadCache();
       await loadOverrides();
+      await loadAutoSourceConfig();
     },
     getSources() {
       return readSources(configPath);
@@ -337,6 +379,17 @@ export function createStore(options = {}) {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, `${JSON.stringify(normalizedSources, null, 2)}\n`, "utf8");
       return normalizedSources;
+    },
+    getAutoSourceConfig() {
+      return { ...autoSourceConfig };
+    },
+    async saveAutoSourceConfig(config) {
+      autoSourceConfig = normalizeAutoSourceConfig(config || {});
+      await persistAutoSourceConfig();
+      return { ...autoSourceConfig };
+    },
+    async discoverAutoSources(config) {
+      return discoverAutoSourcesFromPage(config || autoSourceConfig, { fetchImpl, now });
     },
     getCategories() {
       return normalizeCategories(overrides.categories);

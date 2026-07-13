@@ -395,6 +395,29 @@ export function createApp(store, options = {}) {
     }
   });
 
+  app.get("/api/auto-sources", (_req, res) => {
+    res.json(store.getAutoSourceConfig ? store.getAutoSourceConfig() : { enabled: false });
+  });
+
+  app.put("/api/auto-sources", async (req, res) => {
+    try {
+      const config = await store.saveAutoSourceConfig(req.body || {});
+      await store.refresh();
+      res.json({ config, status: store.getStatus() });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/auto-sources/discover", async (req, res) => {
+    try {
+      const result = await store.discoverAutoSources(req.body || {});
+      res.json(result);
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
   app.post("/api/refresh", async (_req, res, next) => {
     try {
       await store.refresh();

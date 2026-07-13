@@ -24,8 +24,26 @@ function createFakeStore(channelOverrides) {
 
   return {
     refresh: jest.fn(async () => ({ ok: true })),
-    getSources: jest.fn(async () => [{ name: "A", url: "http://a.example/list.m3u" }]),
+    getSources: jest.fn(async () => [{ name: "A", url: "http://a.example/list.m3u", hidden: false }]),
     saveSources: jest.fn(async (sources) => sources),
+    getAutoSourceConfig: jest.fn(() => ({
+      enabled: false,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: ["电信"],
+      disabledTypeNames: []
+    })),
+    saveAutoSourceConfig: jest.fn(async (config) => config),
+    discoverAutoSources: jest.fn(async () => ({
+      sources: [
+        {
+          name: "自动-四川成都组播 四川电信",
+          url: "https://iptv.cqshushu.com/index.php?s=top&t=multicast&channels=1&format=m3u",
+          typeName: "四川成都组播 四川电信",
+          updatedAt: "2026-07-13 12:00:00"
+        }
+      ],
+      rows: []
+    })),
     saveChannelOverride: jest.fn(async (_id, override) => override),
     getCategories: jest.fn(() => ["推荐频道", "央视频道", "卫视频道"]),
     saveCategories: jest.fn(async (categories) => ["推荐频道", ...categories.filter((category) => category !== "推荐频道")]),
@@ -770,12 +788,12 @@ describe("server routes", () => {
     const response = await request(createApp(createFakeStore())).get("/api/sources");
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual([{ name: "A", url: "http://a.example/list.m3u" }]);
+    expect(response.body).toEqual([{ name: "A", url: "http://a.example/list.m3u", hidden: false }]);
   });
 
   test("saves sources and refreshes immediately", async () => {
     const store = createFakeStore();
-    const sources = [{ name: "B", url: "http://b.example/list.m3u" }];
+    const sources = [{ name: "B", url: "http://b.example/list.m3u", hidden: true }];
     const response = await request(createApp(store)).put("/api/sources").send({ sources });
 
     expect(response.status).toBe(200);
@@ -796,6 +814,41 @@ describe("server routes", () => {
     expect(response.body.error).toBe("Source URL is required");
   });
 
+  test("returns and saves auto source config", async () => {
+    const store = createFakeStore();
+    const app = createApp(store);
+
+    const readResponse = await request(app).get("/api/auto-sources");
+    expect(readResponse.status).toBe(200);
+    expect(readResponse.body).toEqual(expect.objectContaining({
+      enabled: false,
+      keywords: ["电信"]
+    }));
+
+    const config = {
+      enabled: true,
+      keywords: ["电信"],
+      disabledTypeNames: ["四川成都组播 四川电信"]
+    };
+    const saveResponse = await request(app).put("/api/auto-sources").send(config);
+
+    expect(saveResponse.status).toBe(200);
+    expect(store.saveAutoSourceConfig).toHaveBeenCalledWith(config);
+    expect(store.refresh).toHaveBeenCalledTimes(1);
+    expect(saveResponse.body.config).toEqual(config);
+  });
+
+  test("previews auto source discovery without saving", async () => {
+    const store = createFakeStore();
+    const response = await request(createApp(store))
+      .post("/api/auto-sources/discover")
+      .send({ enabled: true, keywords: ["电信"] });
+
+    expect(response.status).toBe(200);
+    expect(store.discoverAutoSources).toHaveBeenCalledWith({ enabled: true, keywords: ["电信"] });
+    expect(response.body.sources[0].typeName).toBe("四川成都组播 四川电信");
+  });
+
   test("returns web management page", async () => {
     const response = await request(createApp(createFakeStore())).get("/");
 
@@ -803,6 +856,9 @@ describe("server routes", () => {
     expect(response.headers["content-type"]).toContain("text/html");
     expect(response.text).toContain("IPTV M3U Manager");
     expect(response.text).toContain("source-editor");
+    expect(response.text).toContain("auto-source-editor");
+    expect(response.text).toContain("auto-source-enabled");
+    expect(response.text).toContain("toggle-source-hidden");
     expect(response.text).toContain("move-source");
     expect(response.text).toContain("playlist-sources.m3u");
     expect(response.text).toContain("live.txt");

@@ -9,8 +9,9 @@ async function createTempConfig(sources) {
   const configPath = path.join(dir, "sources.json");
   const cachePath = path.join(dir, "cache.json");
   const overridesPath = path.join(dir, "channel-overrides.json");
+  const autoSourcesPath = path.join(dir, "auto-sources.json");
   await fs.writeFile(configPath, JSON.stringify(sources), "utf8");
-  return { dir, configPath, cachePath, overridesPath };
+  return { dir, configPath, cachePath, overridesPath, autoSourcesPath };
 }
 
 describe("createStore", () => {
@@ -22,7 +23,7 @@ describe("createStore", () => {
     const store = createStore({ configPath, cachePath, fetchImpl: jest.fn() });
 
     await expect(store.getSources()).resolves.toEqual([
-      { name: "Source A", url: "http://source-a.example/list.m3u" }
+      { name: "Source A", url: "http://source-a.example/list.m3u", hidden: false }
     ]);
   });
 
@@ -36,9 +37,98 @@ describe("createStore", () => {
     ]);
 
     expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual([
-      { name: "Source A", url: "http://source-a.example/list.m3u" },
-      { name: "", url: "http://source-b.example/list.m3u" }
+      { name: "Source A", url: "http://source-a.example/list.m3u", hidden: false },
+      { name: "", url: "http://source-b.example/list.m3u", hidden: false }
     ]);
+  });
+
+  test("keeps hidden manual sources in config but skips them during refresh", async () => {
+    const { configPath, cachePath } = await createTempConfig([
+      { name: "Fast", url: "http://fast.example/list.m3u" },
+      { name: "Slow", url: "http://slow.example/list.m3u", hidden: true }
+    ]);
+    const fetchMock = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      text: async () => `#EXTM3U
+#EXTINF:-1,CCTV-1
+http://fast.example/cctv1.m3u8
+`
+    });
+
+    const store = createStore({ configPath, cachePath, fetchImpl: fetchMock });
+    await expect(store.getSources()).resolves.toEqual([
+      { name: "Fast", url: "http://fast.example/list.m3u", hidden: false },
+      { name: "Slow", url: "http://slow.example/list.m3u", hidden: true }
+    ]);
+
+    const status = await store.refresh();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("http://fast.example/list.m3u");
+    expect(status.sourceCount).toBe(1);
+    expect(status.manualSourceCount).toBe(2);
+    expect(store.getChannels().map((channel) => channel.id)).toEqual(["cctv1"]);
+  });
+
+  test("discovers enabled auto sources and fetches only the first row for duplicate types", async () => {
+    const { configPath, cachePath, autoSourcesPath } = await createTempConfig([]);
+    await fs.writeFile(autoSourcesPath, JSON.stringify({
+      enabled: true,
+      keywords: ["电信"],
+      maxPages: 1
+    }), "utf8");
+    const html = `
+<table><tbody>
+<tr><td><a onclick="gotoIP('top','multicast')">1.1.1.1</a></td><td>2</td><td>四川成都组播 四川电信</td><td>2026-07-13</td><td>2026-07-13 12:00:00</td><td>新上线</td></tr>
+<tr><td><a onclick="gotoIP('dup','multicast')">1.1.1.2</a></td><td>2</td><td>四川成都组播 四川电信</td><td>2026-07-13</td><td>2026-07-13 11:00:00</td><td>新上线</td></tr>
+</tbody></table>`;
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: true, text: async () => html })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => `#EXTM3U
+#EXTINF:-1,CCTV-1
+http://auto.example/cctv1.m3u8
+`
+      });
+
+    const store = createStore({
+      configPath,
+      cachePath,
+      autoSourcesPath,
+      fetchImpl: fetchMock,
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+    await store.load();
+    const status = await store.refresh();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][0]).toBe("https://iptv.cqshushu.com/index.php?s=top&t=multicast&channels=1&format=m3u");
+    expect(status.autoSourceCount).toBe(1);
+    expect(status.sources[0]).toEqual(expect.objectContaining({ auto: true, ok: true }));
+    expect(store.getChannel("cctv1").sources[0].sourceName).toBe("自动-四川成都组播 四川电信");
+  });
+
+  test("hidden auto source types stay disabled after rediscovery finds a newer url", async () => {
+    const { configPath, cachePath, autoSourcesPath } = await createTempConfig([]);
+    const store = createStore({
+      configPath,
+      cachePath,
+      autoSourcesPath,
+      fetchImpl: jest.fn()
+    });
+    await store.load();
+
+    await store.saveAutoSourceConfig({
+      enabled: true,
+      disabledTypeNames: ["四川成都组播 四川电信"]
+    });
+
+    expect(JSON.parse(await fs.readFile(autoSourcesPath, "utf8"))).toEqual(expect.objectContaining({
+      enabled: true,
+      disabledTypeNames: ["四川成都组播 四川电信"]
+    }));
   });
 
   test("rejects sources without urls", async () => {
