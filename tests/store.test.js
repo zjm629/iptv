@@ -153,6 +153,27 @@ http://auto.example/cctv1.m3u8
     );
   });
 
+  test("initializes missing source config from example without overwriting existing config", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "iptv-store-"));
+    const configPath = path.join(dir, "sources.json");
+    const cachePath = path.join(dir, "cache.json");
+    await fs.writeFile(path.join(dir, "sources.example.json"), JSON.stringify([
+      { name: "Example", url: "http://example.test/list.m3u" }
+    ]), "utf8");
+
+    const store = createStore({ configPath, cachePath, fetchImpl: jest.fn() });
+    await expect(store.getSources()).resolves.toEqual([
+      { name: "Example", url: "http://example.test/list.m3u", hidden: false }
+    ]);
+
+    await fs.writeFile(configPath, JSON.stringify([
+      { name: "Real", url: "http://real.test/list.m3u" }
+    ]), "utf8");
+    await expect(store.getSources()).resolves.toEqual([
+      { name: "Real", url: "http://real.test/list.m3u", hidden: false }
+    ]);
+  });
+
   test("merges duplicate channels while preserving alternate source lines", async () => {
     const { configPath, cachePath } = await createTempConfig([
       { name: "Source A", url: "http://source-a.example/list.m3u" },

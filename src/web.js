@@ -421,7 +421,7 @@ export function renderHomePage() {
         ...state.autoSourceConfig,
         enabled: $("auto-source-enabled").checked,
         pageUrl: $("auto-source-page-url").value.trim(),
-        keywords: $("auto-source-keywords").value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean),
+        keywords: $("auto-source-keywords").value.split(/[,，\\n]/).map((item) => item.trim()).filter(Boolean),
         maxPages: Number($("auto-source-max-pages").value || 20),
         todayOnly: true,
         onlyStatus: "新上线",
@@ -733,8 +733,16 @@ export function renderHomePage() {
         return;
       }
       state.autoSourcePreview = result.sources || [];
-      $("auto-source-message").textContent = "预览到 " + state.autoSourcePreview.length + " 个自动源";
+      const existingUrls = new Set(state.sources.map((source) => source.url));
+      for (const source of state.autoSourcePreview) {
+        if (source.url && !existingUrls.has(source.url)) {
+          state.sources.push({ name: source.typeName || source.name || "自动采集", url: source.url, hidden: false });
+          existingUrls.add(source.url);
+        }
+      }
+      $("auto-source-message").textContent = "预览到 " + state.autoSourcePreview.length + " 个自动源，已填入采集源列表";
       renderAutoSources();
+      renderSources();
       $("preview-auto-sources").disabled = false;
     });
     $("save-auto-sources").addEventListener("click", async () => {

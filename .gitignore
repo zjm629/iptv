@@ -1,4 +1,7 @@
 node_modules/
+config/auto-sources.json
+config/channel-overrides.json
+config/sources.json
 data/cache.json
 npm-debug.log*
 .worktrees/

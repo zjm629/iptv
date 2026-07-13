@@ -109,4 +109,59 @@ describe("auto source discovery", () => {
       })
     ]);
   });
+
+  test("uses the configured page url as-is for the first discovery request", async () => {
+    const requestedUrls = [];
+    const fetchMock = async (url) => {
+      requestedUrls.push(url);
+      return {
+        ok: true,
+        text: async () => SAMPLE_HTML
+      };
+    };
+
+    await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: ["电信"]
+    }, {
+      fetchImpl: fetchMock,
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(requestedUrls).toEqual(["https://iptv.cqshushu.com/index.php"]);
+  });
+
+  test("falls back to the base index page when filtered search urls are blocked", async () => {
+    const requestedUrls = [];
+    const fetchMock = async (url) => {
+      requestedUrls.push(url);
+      if (requestedUrls.length === 1) {
+        return {
+          ok: false,
+          status: 403,
+          text: async () => "blocked"
+        };
+      }
+      return {
+        ok: true,
+        text: async () => SAMPLE_HTML
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php?t=all&province=all&q=%E7%94%B5%E4%BF%A1",
+      keywords: ["电信"]
+    }, {
+      fetchImpl: fetchMock,
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(requestedUrls).toEqual([
+      "https://iptv.cqshushu.com/index.php?t=all&province=all&q=%E7%94%B5%E4%BF%A1",
+      "https://iptv.cqshushu.com/index.php"
+    ]);
+    expect(result.sources[0].url).toBe("https://iptv.cqshushu.com/index.php?s=top-sichuan&t=multicast&channels=1&format=m3u");
+  });
 });

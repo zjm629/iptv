@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { jest } from "@jest/globals";
 import { createApp, DEFAULT_HLS_START_TIMEOUT_MS } from "../src/server.js";
+import { renderHomePage } from "../src/web.js";
 
 function createFakeStore(channelOverrides) {
   const channels = channelOverrides || [
@@ -877,5 +878,15 @@ describe("server routes", () => {
     expect(response.text).not.toContain("playlist.json");
     expect(response.text).not.toContain("tvbox.json");
     expect(response.text).not.toContain("warehouse.json");
+  });
+
+  test("serves web management page with valid inline scripts", () => {
+    const html = renderHomePage();
+    const scripts = Array.from(html.matchAll(/<script>([\s\S]*?)<\/script>/g), (match) => match[1]);
+
+    expect(scripts.length).toBeGreaterThan(0);
+    for (const script of scripts) {
+      expect(() => new Function(script)).not.toThrow();
+    }
   });
 });

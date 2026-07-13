@@ -68,16 +68,19 @@ function normalizeAutoSourceConfig(value = {}) {
 
 function buildPageUrl(pageUrl, page) {
   const url = new URL(pageUrl);
-  if (!url.searchParams.has("t")) {
-    url.searchParams.set("t", "all");
+  if (page === 1) {
+    return url.toString();
   }
-  if (!url.searchParams.has("province")) {
-    url.searchParams.set("province", "all");
-  }
-  if (!url.searchParams.has("limit")) {
-    url.searchParams.set("limit", "10");
+  if (!url.searchParams.has("page")) {
+    return null;
   }
   url.searchParams.set("page", String(page));
+  return url.toString();
+}
+
+function buildBaseIndexUrl(pageUrl) {
+  const url = new URL(pageUrl);
+  url.search = "";
   return url.toString();
 }
 
@@ -89,6 +92,17 @@ function buildM3uUrl(pageUrl, row) {
   url.searchParams.set("channels", "1");
   url.searchParams.set("format", "m3u");
   return url.toString();
+}
+
+async function fetchDiscoveryPage(fetchImpl, url, config) {
+  return fetchImpl(url, {
+    headers: {
+      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 IPTV-M3U-Manager/1.0",
+      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "accept-language": "zh-CN,zh;q=0.9",
+      "referer": config.pageUrl
+    }
+  });
 }
 
 function filterRows(rows, config, now = new Date()) {
@@ -138,19 +152,23 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
 
   for (let page = 1; page <= config.maxPages; page += 1) {
     const url = buildPageUrl(config.pageUrl, page);
-    const response = await fetchImpl(url, {
-      headers: {
-        "user-agent": "Mozilla/5.0 IPTV-M3U-Manager/1.0",
-        "accept": "text/html,*/*"
-      }
-    });
+    if (!url) {
+      break;
+    }
+    let response = await fetchDiscoveryPage(fetchImpl, url, config);
+    let effectiveUrl = url;
+    if (!response.ok && page === 1 && new URL(config.pageUrl).search) {
+      const fallbackUrl = buildBaseIndexUrl(config.pageUrl);
+      response = await fetchDiscoveryPage(fetchImpl, fallbackUrl, config);
+      effectiveUrl = fallbackUrl;
+    }
     if (!response.ok) {
       throw new Error(`Auto source page HTTP ${response.status}`);
     }
 
     const html = await response.text();
     const pageRows = parseTableRows(html);
-    pages.push({ page, url, rows: pageRows.length });
+    pages.push({ page, url: effectiveUrl, rows: pageRows.length });
     rows.push(...pageRows);
 
     if (!html.includes("下一页") || pageRows.length === 0) {

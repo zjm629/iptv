@@ -20,6 +20,29 @@ async function readJson(filePath, fallback) {
   }
 }
 
+async function ensureJsonFromExample(filePath) {
+  try {
+    await fs.access(filePath);
+    return;
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const parsed = path.parse(filePath);
+  const examplePath = path.join(parsed.dir, `${parsed.name}.example${parsed.ext}`);
+  try {
+    const exampleContent = await fs.readFile(examplePath, "utf8");
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, exampleContent, "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
 function createInitialStatus() {
   return {
     lastRefreshAt: null,
@@ -115,6 +138,7 @@ function normalizeSources(sources) {
 }
 
 async function readSources(configPath) {
+  await ensureJsonFromExample(configPath);
   return normalizeSources(await readJson(configPath, []));
 }
 
