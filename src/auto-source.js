@@ -71,7 +71,7 @@ function buildPageUrl(pageUrl, page) {
   if (page === 1) {
     return url.toString();
   }
-  if (!url.searchParams.has("page")) {
+  if (!url.search && !url.searchParams.has("page")) {
     return null;
   }
   url.searchParams.set("page", String(page));
@@ -149,9 +149,11 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
   const now = options.now || new Date();
   const rows = [];
   const pages = [];
+  const warnings = [];
+  let useFallbackBase = false;
 
   for (let page = 1; page <= config.maxPages; page += 1) {
-    const url = buildPageUrl(config.pageUrl, page);
+    const url = buildPageUrl(useFallbackBase ? buildBaseIndexUrl(config.pageUrl) : config.pageUrl, page);
     if (!url) {
       break;
     }
@@ -161,9 +163,13 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
       const fallbackUrl = buildBaseIndexUrl(config.pageUrl);
       response = await fetchDiscoveryPage(fetchImpl, fallbackUrl, config);
       effectiveUrl = fallbackUrl;
+      useFallbackBase = true;
+      warnings.push("目标搜索页被安全验证拦截，已改用首页兜底采集。");
     }
     if (!response.ok) {
-      throw new Error(`Auto source page HTTP ${response.status}`);
+      pages.push({ page, url: effectiveUrl, rows: 0, error: `HTTP ${response.status}` });
+      warnings.push(`第 ${page} 页采集失败：HTTP ${response.status}`);
+      break;
     }
 
     const html = await response.text();
@@ -186,7 +192,7 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
     status: row.status
   }));
 
-  return { config, sources, rows: selectedRows, pages };
+  return { config, sources, rows: selectedRows, pages, warnings };
 }
 
 export { filterRows, normalizeAutoSourceConfig, parseTableRows, todayInShanghai };

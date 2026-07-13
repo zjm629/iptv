@@ -850,6 +850,32 @@ describe("server routes", () => {
     expect(response.body.sources[0].typeName).toBe("四川成都组播 四川电信");
   });
 
+  test("collects discovered auto sources into configured sources", async () => {
+    const store = createFakeStore();
+    const selectedSources = [
+      {
+        typeName: "四川成都组播 四川电信",
+        url: "https://iptv.cqshushu.com/index.php?s=top&t=multicast&channels=1&format=m3u"
+      }
+    ];
+    const response = await request(createApp(store))
+      .post("/api/auto-sources/collect")
+      .send({ sources: selectedSources });
+
+    expect(response.status).toBe(200);
+    expect(store.discoverAutoSources).not.toHaveBeenCalled();
+    expect(store.saveSources).toHaveBeenCalledWith([
+      { name: "A", url: "http://a.example/list.m3u", hidden: false },
+      {
+        name: "四川成都组播 四川电信",
+        url: "https://iptv.cqshushu.com/index.php?s=top&t=multicast&channels=1&format=m3u",
+        hidden: false
+      }
+    ]);
+    expect(store.refresh).toHaveBeenCalledTimes(1);
+    expect(response.body.added).toHaveLength(1);
+  });
+
   test("returns web management page", async () => {
     const response = await request(createApp(createFakeStore())).get("/");
 
@@ -857,6 +883,7 @@ describe("server routes", () => {
     expect(response.headers["content-type"]).toContain("text/html");
     expect(response.text).toContain("IPTV M3U Manager");
     expect(response.text).toContain("source-editor");
+    expect(response.text).toContain("/collector");
     expect(response.text).toContain("auto-source-editor");
     expect(response.text).toContain("auto-source-enabled");
     expect(response.text).toContain("toggle-source-hidden");
@@ -878,6 +905,20 @@ describe("server routes", () => {
     expect(response.text).not.toContain("playlist.json");
     expect(response.text).not.toContain("tvbox.json");
     expect(response.text).not.toContain("warehouse.json");
+  });
+
+  test("returns collector page", async () => {
+    const response = await request(createApp(createFakeStore())).get("/collector");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/html");
+    expect(response.text).toContain("自动采集");
+    expect(response.text).toContain("collector-page-url");
+    expect(response.text).toContain("https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1");
+    expect(response.text).toContain("/api/auto-sources/collect");
+    expect(response.text).toContain("select-all");
+    expect(response.text).toContain("PotPlayer测试");
+    expect(response.text).toContain("potplayer://");
   });
 
   test("serves web management page with valid inline scripts", () => {

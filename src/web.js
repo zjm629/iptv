@@ -8,14 +8,8 @@ function escapeHtmlValue(value) {
   }[char]));
 }
 
-export function renderHomePage() {
-  return `<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>IPTV M3U Manager</title>
-  <style>
+function baseStyles() {
+  return `
     :root {
       color-scheme: light;
       --bg: #f6f7f9;
@@ -49,17 +43,6 @@ export function renderHomePage() {
       display: grid;
       gap: 16px;
       padding: 20px clamp(16px, 4vw, 40px) 40px;
-    }
-    .toolbar, .status, .channel, .source-editor, .auto-source-editor, .category-editor {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 14px;
-    }
-    .toolbar {
-      display: grid;
-      grid-template-columns: 1fr repeat(4, auto);
-      gap: 10px;
     }
     input, button, select {
       min-height: 38px;
@@ -98,6 +81,39 @@ export function renderHomePage() {
       text-decoration: none;
     }
     .muted { color: var(--muted); }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: var(--soft);
+      color: var(--accent);
+      font-size: 12px;
+    }
+  `;
+}
+
+export function renderHomePage() {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IPTV M3U Manager</title>
+  <style>
+    ${baseStyles()}
+    .toolbar, .status, .channel, .source-editor, .auto-source-editor, .category-editor {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .toolbar {
+      display: grid;
+      grid-template-columns: 1fr repeat(4, auto);
+      gap: 10px;
+    }
     .source-ok { color: var(--accent); }
     .source-bad { color: var(--danger); }
     .source-list, .category-list {
@@ -226,16 +242,7 @@ export function renderHomePage() {
     .line.disabled {
       opacity: 0.55;
     }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      min-height: 22px;
-      padding: 0 8px;
-      border-radius: 999px;
-      background: var(--soft);
-      color: var(--accent);
-      font-size: 12px;
-    }
+    .auto-source-editor { display: none; }
     @media (max-width: 860px) {
       header, .toolbar, .source-row, .auto-source-grid, .auto-source-preview-row, .line {
         grid-template-columns: 1fr;
@@ -261,6 +268,7 @@ export function renderHomePage() {
       <div class="source-list" id="sources"></div>
       <div class="source-actions">
         <button class="secondary" id="add-source">新增源</button>
+        <a class="linklike" href="/collector">自动采集</a>
         <button id="save-sources">保存并刷新</button>
         <span class="muted" id="source-message"></span>
       </div>
@@ -339,6 +347,19 @@ export function renderHomePage() {
       }
       state.channels = result.channels;
       renderChannels();
+    }
+
+    async function fetchJsonOrFallback(url, fallback) {
+      try {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error("HTTP " + response.status);
+        }
+        return await response.json();
+      } catch (error) {
+        console.error("Load failed:", url, error);
+        return fallback;
+      }
     }
 
     function renderStatus() {
@@ -645,11 +666,11 @@ export function renderHomePage() {
 
     async function load() {
       const [status, channels, sources, categories, autoSourceConfig] = await Promise.all([
-        fetch("/api/status").then((response) => response.json()),
-        fetch("/api/channels").then((response) => response.json()),
-        fetch("/api/sources").then((response) => response.json()),
-        fetch("/api/categories").then((response) => response.json()),
-        fetch("/api/auto-sources").then((response) => response.json())
+        fetchJsonOrFallback("/api/status", { lastSuccessAt: null, channelCount: 0, sourceCount: 0, sources: [] }),
+        fetchJsonOrFallback("/api/channels", []),
+        fetchJsonOrFallback("/api/sources", []),
+        fetchJsonOrFallback("/api/categories", ["推荐频道"]),
+        fetchJsonOrFallback("/api/auto-sources", state.autoSourceConfig)
       ]);
       state.status = status;
       state.channels = channels;
@@ -777,6 +798,195 @@ export function renderHomePage() {
       $("refresh").disabled = false;
     });
     load();
+  </script>
+</body>
+</html>`;
+}
+
+export function renderCollectorPage() {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>自动采集 - IPTV M3U Manager</title>
+  <style>
+    ${baseStyles()}
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .collector-grid {
+      display: grid;
+      grid-template-columns: 1fr minmax(100px, 140px);
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .actions, .result-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-top: 12px;
+    }
+    .results {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .result-row {
+      display: grid;
+      grid-template-columns: auto minmax(180px, 280px) 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+      overflow-wrap: anywhere;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .warning { color: var(--danger); }
+    @media (max-width: 760px) {
+      .collector-grid, .result-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>自动采集</h1>
+      <div class="muted" id="subtitle">采集完成后会自动加入首页采集源</div>
+    </div>
+    <a class="linklike" href="/">返回首页</a>
+  </header>
+  <main>
+    <section class="panel">
+      <h2>采集设置</h2>
+      <div class="collector-grid">
+        <input id="collector-page-url" value="https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1">
+        <input id="collector-max-pages" type="number" min="1" max="20" step="1" value="10">
+      </div>
+      <input id="collector-keywords" value="电信" placeholder="关键词，多个用逗号分隔">
+      <div class="actions">
+        <button id="preview">预览采集</button>
+        <button id="select-all" class="secondary">全选</button>
+        <button id="clear-selected" class="secondary">取消全选</button>
+        <button id="collect" class="secondary">提交选中到首页采集源</button>
+        <span class="muted" id="message"></span>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>采集结果</h2>
+      <div id="warnings"></div>
+      <div class="results" id="results"></div>
+    </section>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let latestSources = [];
+
+    function escapeHtml(value) {
+      return String(value || "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      }[char]));
+    }
+
+    function configFromForm() {
+      return {
+        enabled: true,
+        pageUrl: $("collector-page-url").value.trim(),
+        keywords: $("collector-keywords").value.split(/[,，\\n]/).map((item) => item.trim()).filter(Boolean),
+        maxPages: Number($("collector-max-pages").value || 10),
+        todayOnly: true,
+        onlyStatus: "新上线",
+        uniqueByType: false
+      };
+    }
+
+    function renderDiscovery(result) {
+      latestSources = result.sources || [];
+      const warnings = result.warnings || [];
+      $("warnings").innerHTML = warnings.map((warning) =>
+        "<div class='warning'>" + escapeHtml(warning) + "</div>"
+      ).join("");
+      $("results").innerHTML = latestSources.length
+        ? latestSources.map((source) =>
+          "<div class='result-row'>" +
+          "<input class='result-check' type='checkbox' checked data-url='" + escapeHtml(source.url) + "'>" +
+          "<strong>" + escapeHtml(source.typeName || source.name) + "</strong>" +
+          "<span>" + escapeHtml(source.url) + (source.updatedAt ? " · " + escapeHtml(source.updatedAt) : "") + "</span>" +
+          "<button class='secondary test-potplayer' data-url='" + escapeHtml(source.url) + "'>PotPlayer测试</button>" +
+          "</div>"
+        ).join("")
+        : "<div class='muted'>暂未采集到符合条件的源。</div>";
+      document.querySelectorAll(".test-potplayer").forEach((button) => {
+        button.addEventListener("click", () => {
+          window.location.href = "potplayer://" + button.dataset.url;
+        });
+      });
+    }
+
+    async function postJson(url, payload) {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "操作失败");
+      }
+      return result;
+    }
+
+    $("preview").addEventListener("click", async () => {
+      $("preview").disabled = true;
+      $("message").textContent = "采集中...";
+      try {
+        const result = await postJson("/api/auto-sources/discover", configFromForm());
+        renderDiscovery(result);
+        $("message").textContent = "预览到 " + latestSources.length + " 个源";
+      } catch (error) {
+        $("message").textContent = error.message;
+      } finally {
+        $("preview").disabled = false;
+      }
+    });
+
+    $("select-all").addEventListener("click", () => {
+      document.querySelectorAll(".result-check").forEach((checkbox) => {
+        checkbox.checked = true;
+      });
+    });
+
+    $("clear-selected").addEventListener("click", () => {
+      document.querySelectorAll(".result-check").forEach((checkbox) => {
+        checkbox.checked = false;
+      });
+    });
+
+    $("collect").addEventListener("click", async () => {
+      $("collect").disabled = true;
+      $("message").textContent = "正在提交选中源...";
+      try {
+        const selectedUrls = new Set(Array.from(document.querySelectorAll(".result-check"))
+          .filter((checkbox) => checkbox.checked)
+          .map((checkbox) => checkbox.dataset.url));
+        const selectedSources = latestSources.filter((source) => selectedUrls.has(source.url));
+        const result = await postJson("/api/auto-sources/collect", { sources: selectedSources });
+        $("message").textContent = "新增 " + (result.added || []).length + " 个源，已写入首页采集源";
+      } catch (error) {
+        $("message").textContent = error.message;
+      } finally {
+        $("collect").disabled = false;
+      }
+    });
   </script>
 </body>
 </html>`;

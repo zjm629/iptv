@@ -11,7 +11,7 @@ import { pipeline } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { generateLiveM3u, generateLiveTxt, generatePlaylist, generateSourcePlaylist } from "./m3u.js";
 import { createStore } from "./store.js";
-import { renderHomePage, renderPlayerPage } from "./web.js";
+import { renderCollectorPage, renderHomePage, renderPlayerPage } from "./web.js";
 
 const TEST_PLAYLIST_FILES = new Set([
   "test1.m3u",
@@ -338,6 +338,10 @@ export function createApp(store, options = {}) {
     res.type("html").send(renderHomePage());
   });
 
+  app.get("/collector", (_req, res) => {
+    res.type("html").send(renderCollectorPage());
+  });
+
   app.get("/api/status", (_req, res) => {
     res.json(store.getStatus());
   });
@@ -413,6 +417,32 @@ export function createApp(store, options = {}) {
     try {
       const result = await store.discoverAutoSources(req.body || {});
       res.json(result);
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/auto-sources/collect", async (req, res) => {
+    try {
+      const currentSources = await store.getSources();
+      const existingUrls = new Set(currentSources.map((source) => source.url));
+      const additions = [];
+
+      for (const source of req.body?.sources || []) {
+        if (!source.url || existingUrls.has(source.url)) {
+          continue;
+        }
+        additions.push({
+          name: source.typeName || source.name || "自动采集",
+          url: source.url,
+          hidden: false
+        });
+        existingUrls.add(source.url);
+      }
+
+      const sources = await store.saveSources([...currentSources, ...additions]);
+      await store.refresh();
+      res.json({ added: additions, sources, status: store.getStatus() });
     } catch (error) {
       res.status(400).json({ error: error.message });
     }
