@@ -94,7 +94,8 @@ describe("auto source discovery", () => {
       enabled: true,
       pageUrl: "https://iptv.cqshushu.com/index.php",
       keywords: ["电信"],
-      maxPages: 1
+      maxPages: 1,
+      resolveDetailUrls: false
     }, {
       fetchImpl: fetchMock,
       now: new Date("2026-07-13T12:00:00+08:00")
@@ -123,7 +124,8 @@ describe("auto source discovery", () => {
     await discoverAutoSources({
       enabled: true,
       pageUrl: "https://iptv.cqshushu.com/index.php",
-      keywords: ["电信"]
+      keywords: ["电信"],
+      resolveDetailUrls: false
     }, {
       fetchImpl: fetchMock,
       now: new Date("2026-07-13T12:00:00+08:00")
@@ -162,7 +164,8 @@ describe("auto source discovery", () => {
     const result = await discoverAutoSources({
       enabled: true,
       pageUrl: "https://iptv.cqshushu.com/index.php?t=all&province=all&q=%E7%94%B5%E4%BF%A1",
-      keywords: ["电信"]
+      keywords: ["电信"],
+      resolveDetailUrls: false
     }, {
       fetchImpl: fetchMock,
       now: new Date("2026-07-13T12:00:00+08:00")
@@ -206,7 +209,8 @@ describe("auto source discovery", () => {
       pageUrl: "https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1",
       keywords: ["电信"],
       maxPages: 2,
-      uniqueByType: false
+      uniqueByType: false,
+      resolveDetailUrls: false
     }, {
       fetchImpl: fetchMock,
       now: new Date("2026-07-13T12:00:00+08:00")
@@ -221,6 +225,49 @@ describe("auto source discovery", () => {
     expect(cookieHeaders[1]).toContain("PHPSESSID=session-1");
     expect(cookieHeaders[2]).toContain("paer_sec_token=token-1");
     expect(result.sources).toHaveLength(4);
+  });
+
+  test("uses the detail page m3u token instead of the listing token", async () => {
+    const requested = [];
+    const cookieHeaders = [];
+    const response = (status, text) => ({
+      ok: status >= 200 && status < 300,
+      status,
+      headers: { get: () => null },
+      text: async () => text
+    });
+    const fetchMock = async (url, options = {}) => {
+      requested.push(url);
+      cookieHeaders.push(options.headers?.cookie || "");
+      if (url.endsWith("/ad_verify.php")) {
+        return response(200, "window.__ad_ok=1;");
+      }
+      if (url.includes("?p=top-sichuan&t=multicast")) {
+        if (!options.headers?.cookie?.includes("ad_ok=1")) {
+          return response(200, '<title>验证中...</title><script src="https://iptv.cqshushu.com/ad_verify.php"></script>');
+        }
+        return response(200, '<a href="?s=real-sichuan&t=multicast">M3U接口</a>');
+      }
+      return response(200, SAMPLE_HTML);
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: ["电信"],
+      maxPages: 1
+    }, {
+      fetchImpl: fetchMock,
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(requested).toEqual([
+      "https://iptv.cqshushu.com/index.php",
+      "https://iptv.cqshushu.com/ad_verify.php",
+      "https://iptv.cqshushu.com/index.php?p=top-sichuan&t=multicast"
+    ]);
+    expect(cookieHeaders[2]).toContain("ad_ok=1");
+    expect(result.sources[0].url).toBe("https://iptv.cqshushu.com/index.php?s=real-sichuan&t=multicast&channels=1&format=m3u");
   });
 
   test("retries a rate-limited discovery page before giving up", async () => {

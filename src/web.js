@@ -242,6 +242,12 @@ export function renderHomePage() {
     .line.disabled {
       opacity: 0.55;
     }
+    .header-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
     .auto-source-editor { display: none; }
     @media (max-width: 860px) {
       header, .toolbar, .source-row, .auto-source-grid, .auto-source-preview-row, .line {
@@ -260,7 +266,10 @@ export function renderHomePage() {
       <h1>IPTV M3U Manager</h1>
       <div class="muted" id="subtitle">Loading...</div>
     </div>
-    <button id="refresh">刷新</button>
+    <div class="header-actions">
+      <a class="linklike" href="/collector">自动采集</a>
+      <button id="refresh">刷新</button>
+    </div>
   </header>
   <main>
     <section class="source-editor">
@@ -905,7 +914,11 @@ export function renderCollectorPage() {
         maxPages: Number($("collector-max-pages").value || 10),
         todayOnly: true,
         onlyStatus: "新上线",
-        uniqueByType: false
+        uniqueByType: false,
+        resolveDetailUrls: true,
+        pageDelayMs: 5000,
+        rateLimitDelayMs: 10000,
+        rateLimitRetries: 1
       };
     }
 
@@ -947,7 +960,7 @@ export function renderCollectorPage() {
 
     $("preview").addEventListener("click", async () => {
       $("preview").disabled = true;
-      $("message").textContent = "采集中...";
+      $("message").textContent = "采集中... 正在逐条进入详情页提取真实 M3U，网站限速时会稍等重试。";
       try {
         const result = await postJson("/api/auto-sources/discover", configFromForm());
         renderDiscovery(result);

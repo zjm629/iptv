@@ -75,7 +75,8 @@ http://fast.example/cctv1.m3u8
     await fs.writeFile(autoSourcesPath, JSON.stringify({
       enabled: true,
       keywords: ["电信"],
-      maxPages: 1
+      maxPages: 1,
+      resolveDetailUrls: false
     }), "utf8");
     const html = `
 <table><tbody>
