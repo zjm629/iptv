@@ -140,11 +140,21 @@ describe("auto source discovery", () => {
         return {
           ok: false,
           status: 403,
+          headers: { get: () => "PHPSESSID=session-1; path=/" },
           text: async () => "blocked"
+        };
+      }
+      if (requestedUrls.length === 2) {
+        return {
+          ok: false,
+          status: 500,
+          headers: { get: () => null },
+          text: async () => "challenge failed"
         };
       }
       return {
         ok: true,
+        headers: { get: () => null },
         text: async () => SAMPLE_HTML
       };
     };
@@ -160,8 +170,102 @@ describe("auto source discovery", () => {
 
     expect(requestedUrls).toEqual([
       "https://iptv.cqshushu.com/index.php?t=all&province=all&q=%E7%94%B5%E4%BF%A1",
+      "https://iptv.cqshushu.com/index.php?t=all&province=all&q=%E7%94%B5%E4%BF%A1&_js_challenge=1",
       "https://iptv.cqshushu.com/index.php"
     ]);
     expect(result.sources[0].url).toBe("https://iptv.cqshushu.com/index.php?s=top-sichuan&t=multicast&channels=1&format=m3u");
+  });
+
+  test("passes cqshushu js challenge and continues collecting search pages with cookies", async () => {
+    const requested = [];
+    const cookieHeaders = [];
+    const response = (status, setCookie, text) => ({
+      ok: status >= 200 && status < 300,
+      status,
+      headers: {
+        get(name) {
+          return name === "set-cookie" ? setCookie : null;
+        }
+      },
+      text: async () => text
+    });
+    const fetchMock = async (url, options = {}) => {
+      requested.push(url);
+      cookieHeaders.push(options.headers?.cookie || "");
+      if (url.includes("_js_challenge=1")) {
+        return response(302, "paer_sec_token=token-1; path=/", "");
+      }
+      if (requested.length === 1) {
+        return response(403, "PHPSESSID=session-1; path=/", "blocked");
+      }
+      return response(200, null, url.includes("page=2") ? SAMPLE_HTML : `${SAMPLE_HTML}下一页`);
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1",
+      keywords: ["电信"],
+      maxPages: 2,
+      uniqueByType: false
+    }, {
+      fetchImpl: fetchMock,
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(requested).toEqual([
+      "https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1",
+      "https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1&_js_challenge=1",
+      "https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1",
+      "https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1&page=2"
+    ]);
+    expect(cookieHeaders[1]).toContain("PHPSESSID=session-1");
+    expect(cookieHeaders[2]).toContain("paer_sec_token=token-1");
+    expect(result.sources).toHaveLength(4);
+  });
+
+  test("retries a rate-limited discovery page before giving up", async () => {
+    const requested = [];
+    const waits = [];
+    const fetchMock = async (url) => {
+      requested.push(url);
+      if (url.includes("page=2") && requested.filter((item) => item.includes("page=2")).length === 1) {
+        return {
+          ok: false,
+          status: 429,
+          headers: { get: () => null },
+          text: async () => "rate limited"
+        };
+      }
+      return {
+        ok: true,
+        headers: { get: () => null },
+        text: async () => url.includes("page=2") ? SAMPLE_HTML : `${SAMPLE_HTML}下一页`
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1",
+      keywords: ["鐢典俊"],
+      maxPages: 2,
+      pageDelayMs: 0,
+      rateLimitDelayMs: 1234,
+      uniqueByType: false
+    }, {
+      fetchImpl: fetchMock,
+      sleepImpl: async (ms) => waits.push(ms),
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(requested).toEqual([
+      "https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1",
+      "https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1&page=2",
+      "https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1&page=2"
+    ]);
+    expect(waits).toEqual([1234]);
+    expect(result.pages).toEqual([
+      expect.objectContaining({ page: 1, rows: 5 }),
+      expect.objectContaining({ page: 2, rows: 5 })
+    ]);
   });
 });

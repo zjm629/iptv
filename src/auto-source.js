@@ -13,6 +13,12 @@ function stripTags(value = "") {
   return String(value).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function parseBoundedInteger(value, fallback, min, max) {
+  const parsed = Number.parseInt(value, 10);
+  const number = Number.isFinite(parsed) ? parsed : fallback;
+  return Math.max(min, Math.min(max, number));
+}
+
 function parseTableRows(html = "") {
   const rows = [];
   const rowPattern = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
@@ -62,7 +68,10 @@ function normalizeAutoSourceConfig(value = {}) {
     todayOnly: value.todayOnly !== false,
     onlyStatus: String(value.onlyStatus || "新上线").trim(),
     uniqueByType: value.uniqueByType !== false,
-    maxPages: Math.max(1, Math.min(20, Number.parseInt(value.maxPages || "20", 10) || 20))
+    maxPages: parseBoundedInteger(value.maxPages ?? "20", 20, 1, 20),
+    pageDelayMs: parseBoundedInteger(value.pageDelayMs ?? "1500", 1500, 0, 5000),
+    rateLimitRetries: parseBoundedInteger(value.rateLimitRetries ?? "2", 2, 0, 5),
+    rateLimitDelayMs: parseBoundedInteger(value.rateLimitDelayMs ?? "5000", 5000, 0, 30000)
   };
 }
 
@@ -84,6 +93,12 @@ function buildBaseIndexUrl(pageUrl) {
   return url.toString();
 }
 
+function buildChallengeUrl(pageUrl) {
+  const url = new URL(pageUrl);
+  url.searchParams.set("_js_challenge", "1");
+  return url.toString();
+}
+
 function buildM3uUrl(pageUrl, row) {
   const url = new URL(pageUrl);
   url.search = "";
@@ -95,14 +110,56 @@ function buildM3uUrl(pageUrl, row) {
 }
 
 async function fetchDiscoveryPage(fetchImpl, url, config) {
+  const cookieHeader = config.cookieJar?.header();
   return fetchImpl(url, {
+    redirect: "manual",
     headers: {
       "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 IPTV-M3U-Manager/1.0",
       "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "accept-language": "zh-CN,zh;q=0.9",
-      "referer": config.pageUrl
+      "referer": config.pageUrl,
+      ...(cookieHeader ? { cookie: cookieHeader } : {})
     }
   });
+}
+
+function createCookieJar() {
+  const cookies = new Map();
+
+  function add(value) {
+    const pair = String(value || "").split(";")[0];
+    const equalsIndex = pair.indexOf("=");
+    if (equalsIndex <= 0) {
+      return;
+    }
+    cookies.set(pair.slice(0, equalsIndex), pair.slice(equalsIndex + 1));
+  }
+
+  return {
+    store(headers) {
+      if (!headers) {
+        return;
+      }
+      if (typeof headers.getSetCookie === "function") {
+        for (const value of headers.getSetCookie()) {
+          add(value);
+        }
+      }
+      const combined = typeof headers.get === "function" ? headers.get("set-cookie") : null;
+      if (combined) {
+        for (const value of combined.split(/,(?=[^;,]+=)/)) {
+          add(value);
+        }
+      }
+    },
+    header() {
+      return Array.from(cookies, ([name, value]) => `${name}=${value}`).join("; ");
+    }
+  };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function filterRows(rows, config, now = new Date()) {
@@ -146,22 +203,46 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
   }
 
   const fetchImpl = options.fetchImpl || globalThis.fetch;
+  const sleepImpl = options.sleepImpl || sleep;
   const now = options.now || new Date();
   const rows = [];
   const pages = [];
   const warnings = [];
   let useFallbackBase = false;
+  const cookieJar = createCookieJar();
+  const requestConfig = { ...config, cookieJar };
 
   for (let page = 1; page <= config.maxPages; page += 1) {
+    if (page > 1 && config.pageDelayMs > 0) {
+      await sleepImpl(config.pageDelayMs);
+    }
     const url = buildPageUrl(useFallbackBase ? buildBaseIndexUrl(config.pageUrl) : config.pageUrl, page);
     if (!url) {
       break;
     }
-    let response = await fetchDiscoveryPage(fetchImpl, url, config);
+    let response = await fetchDiscoveryPage(fetchImpl, url, requestConfig);
+    cookieJar.store(response.headers);
+    if (response.status === 403 && url.includes("?")) {
+      const challengeUrl = buildChallengeUrl(url);
+      const challengeResponse = await fetchDiscoveryPage(fetchImpl, challengeUrl, requestConfig);
+      cookieJar.store(challengeResponse.headers);
+      if (challengeResponse.status >= 300 && challengeResponse.status < 400) {
+        response = await fetchDiscoveryPage(fetchImpl, url, requestConfig);
+        cookieJar.store(response.headers);
+      }
+    }
+    for (let attempt = 0; response.status === 429 && attempt < config.rateLimitRetries; attempt += 1) {
+      if (config.rateLimitDelayMs > 0) {
+        await sleepImpl(config.rateLimitDelayMs * (attempt + 1));
+      }
+      response = await fetchDiscoveryPage(fetchImpl, url, requestConfig);
+      cookieJar.store(response.headers);
+    }
     let effectiveUrl = url;
     if (!response.ok && page === 1 && new URL(config.pageUrl).search) {
       const fallbackUrl = buildBaseIndexUrl(config.pageUrl);
-      response = await fetchDiscoveryPage(fetchImpl, fallbackUrl, config);
+      response = await fetchDiscoveryPage(fetchImpl, fallbackUrl, requestConfig);
+      cookieJar.store(response.headers);
       effectiveUrl = fallbackUrl;
       useFallbackBase = true;
       warnings.push("目标搜索页被安全验证拦截，已改用首页兜底采集。");
