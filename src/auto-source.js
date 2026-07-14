@@ -384,7 +384,9 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
     await ensureAdVerification(fetchImpl, config.pageUrl, requestConfig);
   }
   const sources = [];
+  const seenSourceUrls = new Set();
   let skippedWithoutDetailUrl = 0;
+  let skippedDuplicateUrls = 0;
   let detailIndex = 0;
   for (const row of selectedRows) {
     let sourceUrl = buildM3uUrl(config.pageUrl, row);
@@ -401,6 +403,11 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
         continue;
       }
     }
+    if (seenSourceUrls.has(sourceUrl)) {
+      skippedDuplicateUrls += 1;
+      continue;
+    }
+    seenSourceUrls.add(sourceUrl);
     sources.push({
       name: `自动-${row.typeName}`,
       url: sourceUrl,
@@ -412,6 +419,9 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
   }
   if (skippedWithoutDetailUrl > 0) {
     warnings.push(`已跳过 ${skippedWithoutDetailUrl} 个未取到真实 M3U 的源。`);
+  }
+  if (skippedDuplicateUrls > 0) {
+    warnings.push(`已跳过 ${skippedDuplicateUrls} 个重复 M3U 地址。`);
   }
 
   return { config, sources, rows: selectedRows, pages, warnings };

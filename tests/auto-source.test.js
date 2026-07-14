@@ -253,7 +253,8 @@ describe("auto source discovery", () => {
     ]);
     expect(cookieHeaders[1]).toContain("PHPSESSID=session-1");
     expect(cookieHeaders[2]).toContain("paer_sec_token=token-1");
-    expect(result.sources).toHaveLength(4);
+    expect(result.sources).toHaveLength(2);
+    expect(result.warnings).toContain("已跳过 2 个重复 M3U 地址。");
   });
 
   test("uses the detail page m3u token instead of the listing token", async () => {
@@ -386,6 +387,51 @@ describe("auto source discovery", () => {
     expect(waits).toEqual([4321]);
     expect(result.warnings).toEqual([]);
     expect(result.sources[0].url).toBe("https://iptv.cqshushu.com/index.php?s=retry-real-sichuan&t=multicast&channels=1&format=m3u");
+  });
+
+  test("deduplicates sources that resolve to the same real m3u url", async () => {
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("?p=top-sichuan&t=multicast") || url.includes("?p=dup-sichuan&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => '<a href="?s=same-real-sichuan&t=multicast">M3U接口</a>'
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => SAMPLE_HTML
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: ["电信"],
+      maxPages: 1,
+      uniqueByType: false,
+      detailDelayMs: 0
+    }, {
+      fetchImpl: fetchMock,
+      sleepImpl: async () => {},
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(result.sources.map((source) => source.url)).toEqual([
+      "https://iptv.cqshushu.com/index.php?s=same-real-sichuan&t=multicast&channels=1&format=m3u"
+    ]);
+    expect(result.warnings).toContain("已跳过 1 个重复 M3U 地址。");
   });
 
   test("retries a rate-limited discovery page before giving up", async () => {
