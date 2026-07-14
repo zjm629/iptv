@@ -207,14 +207,6 @@ function parseDetailChannelListUrl(html = "", pageUrl = "https://iptv.cqshushu.c
 
 function parseChannelListM3uUrl(html = "", pageUrl = "https://iptv.cqshushu.com/index.php") {
   const source = String(html);
-  const copyPattern = /copyToClipboard\(["']([^"']*format=m3u[^"']*)["']\)/gi;
-  for (const match of source.matchAll(copyPattern)) {
-    const copiedUrl = normalizeCompleteM3uUrl(pageUrl, match[1]);
-    if (copiedUrl) {
-      return copiedUrl;
-    }
-  }
-
   const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
   for (const match of source.matchAll(anchorPattern)) {
     const label = `${match[1]} ${match[2]}`;

@@ -419,6 +419,59 @@ describe("auto source discovery", () => {
     expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=button-channel-token&t=multicast&channels=1&format=m3u");
   });
 
+  test("ignores unrelated copied m3u urls before the m3u interface button", async () => {
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("?p=top-sichuan&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => '<a href="?s=correct-channel-token&t=multicast" class="btn btn-play">open</a>'
+        };
+      }
+      if (url.includes("?s=correct-channel-token&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => `
+            <script>copyToClipboard('http://iptv.cqshushu.com/index.php?s=wrong-empty-token&t=multicast&channels=1&format=m3u')</script>
+            <div class="action-buttons">
+              <a href="#" onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=correct-channel-token&amp;t=multicast&amp;channels=1&amp;format=txt'); return false;" title="复制 TXT 接口链接">TXT接口</a>
+              <a href="#" onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=correct-channel-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;" class="btn btn-play" title="复制 M3U 接口链接">M3U接口</a>
+            </div>
+          `
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => SAMPLE_HTML
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: ["电信"],
+      maxPages: 1
+    }, {
+      fetchImpl: fetchMock,
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=correct-channel-token&t=multicast&channels=1&format=m3u");
+  });
+
   test("skips sources when the detail page does not expose a real m3u token", async () => {
     const fetchMock = async (url) => {
       if (url.endsWith("/ad_verify.php")) {
