@@ -958,6 +958,9 @@ describe("server routes", () => {
     expect(response.text).toContain("potplayer://");
     expect(response.text).toContain("频道数");
     expect(response.text).toContain("更新时间");
+    expect(response.text).toContain("requestTimeoutMs");
+    expect(response.text).toContain("page.error");
+    expect(response.text).toContain("未解析到源列表");
   });
 
   test("starts listening before the initial refresh finishes", async () => {

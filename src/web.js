@@ -935,14 +935,18 @@ export function renderCollectorPage() {
         rateLimitRetries: 1,
         detailDelayMs: 1500,
         detailRetryDelayMs: 6000,
-        detailRetries: 1
+        detailRetries: 1,
+        requestTimeoutMs: 15000
       };
     }
 
     function renderDiscovery(result) {
       latestSources = result.sources || [];
       const warnings = result.warnings || [];
-      $("warnings").innerHTML = warnings.map((warning) =>
+      const pageMessages = (result.pages || [])
+        .filter((page) => page.error || page.rows === 0)
+        .map((page) => "第 " + page.page + " 页：" + (page.error || "未解析到源列表") + "（" + page.url + "）");
+      $("warnings").innerHTML = warnings.concat(pageMessages).map((warning) =>
         "<div class='warning'>" + escapeHtml(warning) + "</div>"
       ).join("");
       $("results").innerHTML = latestSources.length
