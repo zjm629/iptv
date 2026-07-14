@@ -111,6 +111,68 @@ http://auto.example/cctv1.m3u8
     expect(store.getChannel("cctv1").sources[0].sourceName).toBe("自动-四川成都组播 四川电信");
   });
 
+  test("keeps last successful auto sources when later auto discovery is unavailable", async () => {
+    const { configPath, cachePath, autoSourcesPath } = await createTempConfig([]);
+    await fs.writeFile(autoSourcesPath, JSON.stringify({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: ["电信"],
+      maxPages: 1,
+      rateLimitRetries: 0,
+      resolveDetailUrls: false
+    }), "utf8");
+    const html = `
+<table><tbody>
+<tr><td><a onclick="gotoIP('top','multicast')">1.1.1.1</a></td><td>2</td><td>四川成都组播 四川电信</td><td>2026-07-13</td><td>2026-07-13 12:00:00</td><td>新上线</td></tr>
+</tbody></table>`;
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: true, text: async () => html })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => `#EXTM3U
+#EXTINF:-1,CCTV-1
+http://auto.example/cctv1.m3u8
+`
+      })
+      .mockResolvedValueOnce({ ok: false, status: 504, text: async () => "Gateway timeout" })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => `#EXTM3U
+#EXTINF:-1,CCTV-1
+http://auto.example/cctv1.m3u8
+`
+      });
+
+    const store = createStore({
+      configPath,
+      cachePath,
+      autoSourcesPath,
+      fetchImpl: fetchMock,
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+    await store.load();
+    await store.refresh();
+    const status = await store.refresh();
+
+    expect(status.autoSourceFallback).toBe(true);
+    expect(status.autoSourceCount).toBe(1);
+    expect(status.sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "自动采集",
+        ok: false,
+        error: expect.stringContaining("已沿用上次成功")
+      }),
+      expect.objectContaining({
+        name: "自动-四川成都组播 四川电信",
+        ok: true
+      })
+    ]));
+    expect(store.getChannel("cctv1")).toEqual(expect.objectContaining({
+      name: "CCTV-1"
+    }));
+  });
+
   test("hidden auto source types stay disabled after rediscovery finds a newer url", async () => {
     const { configPath, cachePath, autoSourcesPath } = await createTempConfig([]);
     const store = createStore({

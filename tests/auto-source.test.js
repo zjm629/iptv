@@ -479,4 +479,48 @@ describe("auto source discovery", () => {
       expect.objectContaining({ page: 2, rows: 5 })
     ]);
   });
+
+  test("retries a temporary gateway failure discovery page", async () => {
+    const requested = [];
+    const waits = [];
+    const fetchMock = async (url) => {
+      requested.push(url);
+      if (requested.length === 1) {
+        return {
+          ok: false,
+          status: 504,
+          headers: { get: () => null },
+          text: async () => "gateway timeout"
+        };
+      }
+      return {
+        ok: true,
+        headers: { get: () => null },
+        text: async () => SAMPLE_HTML
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1",
+      keywords: [],
+      maxPages: 1,
+      rateLimitRetries: 1,
+      rateLimitDelayMs: 222,
+      resolveDetailUrls: false
+    }, {
+      fetchImpl: fetchMock,
+      sleepImpl: async (ms) => waits.push(ms),
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(requested).toEqual([
+      "https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1",
+      "https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1"
+    ]);
+    expect(waits).toEqual([222]);
+    expect(result.pages).toEqual([
+      expect.objectContaining({ page: 1, rows: 5 })
+    ]);
+  });
 });

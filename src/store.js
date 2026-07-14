@@ -50,6 +50,7 @@ function createInitialStatus() {
     refreshing: false,
     channelCount: 0,
     sourceCount: 0,
+    autoSourceFallback: false,
     sources: []
   };
 }
@@ -135,6 +136,43 @@ function normalizeSources(sources) {
 
     return { name, url, hidden: Boolean(source?.hidden) };
   });
+}
+
+function normalizeCachedAutoSources(sources) {
+  if (!Array.isArray(sources)) {
+    return [];
+  }
+
+  return sources
+    .map((source) => {
+      const url = String(source?.url || "").trim();
+      if (!url) {
+        return null;
+      }
+
+      return {
+        name: String(source?.name || url).trim(),
+        url,
+        hidden: Boolean(source?.hidden),
+        auto: true,
+        typeName: String(source?.typeName || "").trim(),
+        updatedAt: String(source?.updatedAt || "").trim(),
+        status: String(source?.status || "").trim()
+      };
+    })
+    .filter(Boolean);
+}
+
+function filterAutoSourcesByConfig(sources, config) {
+  const disabledTypeNames = new Set(config.disabledTypeNames || []);
+  return normalizeCachedAutoSources(sources).filter((source) => !disabledTypeNames.has(source.typeName));
+}
+
+function buildAutoSourceFallbackError(error, discovery) {
+  const details = error?.message
+    || (Array.isArray(discovery?.warnings) && discovery.warnings.length > 0 ? discovery.warnings.join("；") : "")
+    || "本次没有采集到可用源";
+  return `${details}，已沿用上次成功结果`;
 }
 
 async function readSources(configPath) {
@@ -243,6 +281,7 @@ export function createStore(options = {}) {
   let channels = [];
   let overrides = createInitialOverrides();
   let autoSourceConfig = createInitialAutoSourceConfig();
+  let lastSuccessfulAutoSources = [];
   let status = createInitialStatus();
   let refreshPromise = null;
 
@@ -296,6 +335,7 @@ export function createStore(options = {}) {
     }
 
     channels = Array.isArray(cache.channels) ? cache.channels : [];
+    lastSuccessfulAutoSources = normalizeCachedAutoSources(cache.lastSuccessfulAutoSources);
     status = {
       ...createInitialStatus(),
       ...cache.status,
@@ -305,7 +345,7 @@ export function createStore(options = {}) {
 
   async function persistCache() {
     await fs.mkdir(path.dirname(cachePath), { recursive: true });
-    await fs.writeFile(cachePath, JSON.stringify({ channels, status }, null, 2), "utf8");
+    await fs.writeFile(cachePath, JSON.stringify({ channels, status, lastSuccessfulAutoSources }, null, 2), "utf8");
   }
 
   async function runRefresh() {
@@ -314,22 +354,44 @@ export function createStore(options = {}) {
     const activeManualSources = manualSources.filter((source) => !source.hidden);
     let configuredSources = activeManualSources;
     let autoDiscovery = null;
+    let usedAutoSources = [];
+    let autoSourceFallback = false;
     const entries = [];
     const sourceStatuses = [];
 
     if (autoSourceConfig.enabled) {
       try {
         autoDiscovery = await discoverAutoSourcesFromPage(autoSourceConfig, { fetchImpl, now });
-        configuredSources = [...activeManualSources, ...autoDiscovery.sources];
+        if (autoDiscovery.sources.length > 0) {
+          usedAutoSources = normalizeCachedAutoSources(autoDiscovery.sources);
+          lastSuccessfulAutoSources = usedAutoSources;
+        } else {
+          usedAutoSources = filterAutoSourcesByConfig(lastSuccessfulAutoSources, autoSourceConfig);
+          autoSourceFallback = usedAutoSources.length > 0;
+          if (autoSourceFallback) {
+            sourceStatuses.push({
+              name: "自动采集",
+              url: autoSourceConfig.pageUrl,
+              ok: false,
+              channels: 0,
+              auto: true,
+              error: buildAutoSourceFallbackError(null, autoDiscovery)
+            });
+          }
+        }
       } catch (error) {
+        usedAutoSources = filterAutoSourcesByConfig(lastSuccessfulAutoSources, autoSourceConfig);
+        autoSourceFallback = usedAutoSources.length > 0;
         sourceStatuses.push({
           name: "自动采集",
           url: autoSourceConfig.pageUrl,
           ok: false,
           channels: 0,
-          error: error.message
+          auto: true,
+          error: autoSourceFallback ? buildAutoSourceFallbackError(error, null) : error.message
         });
       }
+      configuredSources = [...activeManualSources, ...usedAutoSources];
     }
 
     for (const source of configuredSources) {
@@ -372,7 +434,8 @@ export function createStore(options = {}) {
         channelCount: channels.length,
         sourceCount: configuredSources.length,
         manualSourceCount: manualSources.length,
-        autoSourceCount: autoDiscovery?.sources.length || 0,
+        autoSourceCount: usedAutoSources.length,
+        autoSourceFallback,
         sources: sourceStatuses
       };
       await persistCache();
@@ -386,7 +449,8 @@ export function createStore(options = {}) {
       channelCount: channels.length,
       sourceCount: configuredSources.length,
       manualSourceCount: manualSources.length,
-      autoSourceCount: autoDiscovery?.sources.length || 0,
+      autoSourceCount: usedAutoSources.length,
+      autoSourceFallback,
       sources: sourceStatuses
     };
 

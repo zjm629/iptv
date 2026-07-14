@@ -223,6 +223,10 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isTransientDiscoveryStatus(status) {
+  return [429, 502, 503, 504].includes(status);
+}
+
 async function fetchWithSession(fetchImpl, url, requestConfig) {
   let response = await fetchDiscoveryPage(fetchImpl, url, requestConfig);
   requestConfig.cookieJar.store(response.headers);
@@ -349,7 +353,7 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
       break;
     }
     let response = await fetchWithSession(fetchImpl, url, requestConfig);
-    for (let attempt = 0; response.status === 429 && attempt < config.rateLimitRetries; attempt += 1) {
+    for (let attempt = 0; isTransientDiscoveryStatus(response.status) && attempt < config.rateLimitRetries; attempt += 1) {
       if (config.rateLimitDelayMs > 0) {
         await sleepImpl(config.rateLimitDelayMs * (attempt + 1));
       }
