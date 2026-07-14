@@ -1,4 +1,4 @@
-import { discoverAutoSources, filterRows, normalizeAutoSourceConfig, parseTableRows } from "../src/auto-source.js";
+import { debugAutoSourceByIp, discoverAutoSources, filterRows, normalizeAutoSourceConfig, parseTableRows } from "../src/auto-source.js";
 
 const SAMPLE_HTML = `
 <table><tbody>
@@ -796,5 +796,34 @@ describe("auto source discovery", () => {
     expect(result.pages).toEqual([
       expect.objectContaining({ page: 1, rows: 5 })
     ]);
+  });
+
+  test("debug discovery returns when the source site request times out", async () => {
+    const fetchMock = (_url, options = {}) => new Promise((_resolve, reject) => {
+      options.signal?.addEventListener("abort", () => {
+        reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
+      });
+    });
+
+    const result = await debugAutoSourceByIp({
+      pageUrl: "https://iptv.cqshushu.com/index.php?q=test",
+      keywords: [],
+      startPage: 1,
+      maxPages: 1,
+      requestTimeoutMs: 10,
+      rateLimitRetries: 0
+    }, "171.98.232.148", {
+      fetchImpl: fetchMock,
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(result.pages).toEqual([
+      expect.objectContaining({
+        page: 1,
+        rows: 0,
+        error: expect.stringContaining("timed out")
+      })
+    ]);
+    expect(result.row).toBeNull();
   });
 });

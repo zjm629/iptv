@@ -76,6 +76,7 @@ function normalizeAutoSourceConfig(value = {}) {
     detailDelayMs: parseBoundedInteger(value.detailDelayMs ?? "1200", 1200, 0, 10000),
     detailRetries: parseBoundedInteger(value.detailRetries ?? "1", 1, 0, 3),
     detailRetryDelayMs: parseBoundedInteger(value.detailRetryDelayMs ?? "5000", 5000, 0, 30000),
+    requestTimeoutMs: parseBoundedInteger(value.requestTimeoutMs ?? "15000", 15000, 1, 120000),
     resolveDetailUrls: value.resolveDetailUrls !== false,
     validateM3uUrls: value.validateM3uUrls !== false
   };
@@ -284,9 +285,30 @@ function summarizeTokenAnchors(html = "", pageUrl = "https://iptv.cqshushu.com/i
   return anchors;
 }
 
+function formatFetchError(error, config) {
+  if (error?.name === "AbortError") {
+    return `Request timed out after ${config.requestTimeoutMs} ms`;
+  }
+  return error?.message || String(error);
+}
+
+async function fetchWithTimeout(fetchImpl, url, options, timeoutMs) {
+  if (!timeoutMs || typeof AbortController === "undefined") {
+    return fetchImpl(url, options);
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchImpl(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchDiscoveryPage(fetchImpl, url, config) {
   const cookieHeader = config.cookieJar?.header();
-  return fetchImpl(url, {
+  return fetchWithTimeout(fetchImpl, url, {
     redirect: "manual",
     headers: {
       "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 IPTV-M3U-Manager/1.0",
@@ -295,7 +317,7 @@ async function fetchDiscoveryPage(fetchImpl, url, config) {
       "referer": config.pageUrl,
       ...(cookieHeader ? { cookie: cookieHeader } : {})
     }
-  });
+  }, config.requestTimeoutMs);
 }
 
 function createCookieJar() {
@@ -403,13 +425,23 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl) {
     if (attempt > 0 && requestConfig.detailRetryDelayMs > 0) {
       await sleepImpl(requestConfig.detailRetryDelayMs * attempt);
     }
-    const detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig);
+    let detail;
+    try {
+      detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig);
+    } catch (_error) {
+      continue;
+    }
     const channelListUrl = detail.response.ok ? parseDetailChannelListUrl(detail.html, requestConfig.pageUrl) : "";
     if (!channelListUrl) {
       continue;
     }
 
-    const channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig);
+    let channelList;
+    try {
+      channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig);
+    } catch (_error) {
+      continue;
+    }
     const expectedToken = readSourceToken(requestConfig.pageUrl, channelListUrl);
     const m3uUrl = channelList.response.ok ? parseChannelListM3uUrl(channelList.html, requestConfig.pageUrl, expectedToken) : "";
     if (m3uUrl) {
@@ -422,14 +454,14 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl) {
 async function checkM3uUrl(fetchImpl, url, referer, requestConfig) {
   try {
     const cookieHeader = requestConfig.cookieJar?.header();
-    const response = await fetchImpl(url, {
+    const response = await fetchWithTimeout(fetchImpl, url, {
       headers: {
         "user-agent": "Mozilla/5.0 IPTV-M3U-Manager/1.0",
         "accept": "*/*",
         "referer": referer || requestConfig.pageUrl,
         ...(cookieHeader ? { cookie: cookieHeader } : {})
       }
-    });
+    }, requestConfig.requestTimeoutMs);
     if (!response.ok) {
       return { ok: false, status: response.status, channelLines: 0 };
     }
@@ -440,7 +472,7 @@ async function checkM3uUrl(fetchImpl, url, referer, requestConfig) {
       channelLines: (text.match(/#EXTINF/g) || []).length
     };
   } catch (error) {
-    return { ok: false, error: error.message, channelLines: 0 };
+    return { ok: false, error: formatFetchError(error, requestConfig), channelLines: 0 };
   }
 }
 
@@ -503,12 +535,19 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
     if (!url) {
       break;
     }
-    let response = await fetchWithSession(fetchImpl, url, requestConfig);
-    for (let attempt = 0; isTransientDiscoveryStatus(response.status) && attempt < config.rateLimitRetries; attempt += 1) {
-      if (config.rateLimitDelayMs > 0) {
-        await sleepImpl(config.rateLimitDelayMs * (attempt + 1));
-      }
+    let response;
+    try {
       response = await fetchWithSession(fetchImpl, url, requestConfig);
+      for (let attempt = 0; isTransientDiscoveryStatus(response.status) && attempt < config.rateLimitRetries; attempt += 1) {
+        if (config.rateLimitDelayMs > 0) {
+          await sleepImpl(config.rateLimitDelayMs * (attempt + 1));
+        }
+        response = await fetchWithSession(fetchImpl, url, requestConfig);
+      }
+    } catch (error) {
+      pages.push({ page, url, rows: 0, error: formatFetchError(error, requestConfig) });
+      warnings.push(`第 ${page} 页采集失败：${formatFetchError(error, requestConfig)}`);
+      break;
     }
     let effectiveUrl = url;
     if (!response.ok && page === 1 && new URL(config.pageUrl).search) {
@@ -614,12 +653,18 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
     if (!url) {
       break;
     }
-    let response = await fetchWithSession(fetchImpl, url, requestConfig);
-    for (let attempt = 0; isTransientDiscoveryStatus(response.status) && attempt < config.rateLimitRetries; attempt += 1) {
-      if (config.rateLimitDelayMs > 0) {
-        await sleepImpl(config.rateLimitDelayMs * (attempt + 1));
-      }
+    let response;
+    try {
       response = await fetchWithSession(fetchImpl, url, requestConfig);
+      for (let attempt = 0; isTransientDiscoveryStatus(response.status) && attempt < config.rateLimitRetries; attempt += 1) {
+        if (config.rateLimitDelayMs > 0) {
+          await sleepImpl(config.rateLimitDelayMs * (attempt + 1));
+        }
+        response = await fetchWithSession(fetchImpl, url, requestConfig);
+      }
+    } catch (error) {
+      pages.push({ page, url, rows: 0, error: formatFetchError(error, requestConfig) });
+      break;
     }
     if (!response.ok) {
       pages.push({ page, url, rows: 0, error: `HTTP ${response.status}` });
@@ -642,7 +687,20 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
 
   await ensureAdVerification(fetchImpl, config.pageUrl, requestConfig);
   const detailUrl = buildDetailUrl(config.pageUrl, row);
-  const detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig);
+  let detail;
+  try {
+    detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig);
+  } catch (error) {
+    result.detail = {
+      url: detailUrl,
+      status: 0,
+      error: formatFetchError(error, requestConfig),
+      channelListUrl: "",
+      expectedToken: "",
+      anchors: []
+    };
+    return result;
+  }
   const channelListUrl = detail.response.ok ? parseDetailChannelListUrl(detail.html, config.pageUrl) : "";
   const expectedToken = readSourceToken(config.pageUrl, channelListUrl);
   result.detail = {
@@ -657,7 +715,19 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
     return result;
   }
 
-  const channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig);
+  let channelList;
+  try {
+    channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig);
+  } catch (error) {
+    result.channelList = {
+      url: channelListUrl,
+      status: 0,
+      error: formatFetchError(error, requestConfig),
+      anchors: [],
+      selectedM3uUrl: ""
+    };
+    return result;
+  }
   const selectedM3uUrl = channelList.response.ok ? parseChannelListM3uUrl(channelList.html, config.pageUrl, expectedToken) : "";
   result.channelList = {
     url: channelListUrl,
@@ -667,21 +737,32 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
   };
 
   if (selectedM3uUrl) {
-    const m3uResponse = await fetchImpl(selectedM3uUrl, {
-      headers: {
-        "user-agent": "Mozilla/5.0 IPTV-M3U-Manager/1.0",
-        "accept": "*/*",
-        "referer": channelListUrl
-      }
-    });
-    const text = await m3uResponse.text();
-    result.m3uCheck = {
-      url: selectedM3uUrl,
-      status: m3uResponse.status,
-      bytes: text.length,
-      channelLines: (text.match(/#EXTINF/g) || []).length,
-      head: text.slice(0, 160)
-    };
+    try {
+      const m3uResponse = await fetchWithTimeout(fetchImpl, selectedM3uUrl, {
+        headers: {
+          "user-agent": "Mozilla/5.0 IPTV-M3U-Manager/1.0",
+          "accept": "*/*",
+          "referer": channelListUrl
+        }
+      }, requestConfig.requestTimeoutMs);
+      const text = await m3uResponse.text();
+      result.m3uCheck = {
+        url: selectedM3uUrl,
+        status: m3uResponse.status,
+        bytes: text.length,
+        channelLines: (text.match(/#EXTINF/g) || []).length,
+        head: text.slice(0, 160)
+      };
+    } catch (error) {
+      result.m3uCheck = {
+        url: selectedM3uUrl,
+        status: 0,
+        error: formatFetchError(error, requestConfig),
+        bytes: 0,
+        channelLines: 0,
+        head: ""
+      };
+    }
   }
 
   return result;
