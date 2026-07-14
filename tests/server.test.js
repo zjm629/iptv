@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { jest } from "@jest/globals";
-import { createApp, DEFAULT_HLS_START_TIMEOUT_MS } from "../src/server.js";
+import { createApp, DEFAULT_HLS_START_TIMEOUT_MS, startServer } from "../src/server.js";
 import { renderHomePage } from "../src/web.js";
 
 function createFakeStore(channelOverrides) {
@@ -958,6 +958,37 @@ describe("server routes", () => {
     expect(response.text).toContain("potplayer://");
     expect(response.text).toContain("频道数");
     expect(response.text).toContain("更新时间");
+  });
+
+  test("starts listening before the initial refresh finishes", async () => {
+    let resolveRefresh;
+    const store = createFakeStore();
+    store.load = jest.fn(async () => {});
+    store.refresh = jest.fn(() => new Promise((resolve) => {
+      resolveRefresh = resolve;
+    }));
+    const cronImpl = {
+      schedule: jest.fn(() => ({ stop: jest.fn() }))
+    };
+
+    const server = await Promise.race([
+      startServer({ store, port: 0, cronImpl, log: () => {} }),
+      new Promise((resolve) => setTimeout(() => resolve(null), 100))
+    ]);
+
+    expect(server).toBeTruthy();
+    try {
+      const port = server.address().port;
+      const response = await request(`http://127.0.0.1:${port}`).get("/");
+
+      expect(response.status).toBe(200);
+      expect(store.load).toHaveBeenCalledTimes(1);
+      expect(store.refresh).toHaveBeenCalledTimes(1);
+      expect(cronImpl.schedule).toHaveBeenCalledTimes(1);
+    } finally {
+      resolveRefresh?.({});
+      await new Promise((resolve) => server?.close(resolve));
+    }
   });
 
   test("serves web management page with valid inline scripts", () => {

@@ -687,23 +687,39 @@ export function createApp(store, options = {}) {
   return app;
 }
 
-export async function startServer() {
-  const port = Number.parseInt(process.env.PORT || "3080", 10);
-  const refreshCron = process.env.REFRESH_CRON || "0 */2 * * *";
-  const store = createStore();
+export async function startServer(options = {}) {
+  const port = options.port ?? Number.parseInt(process.env.PORT || "3080", 10);
+  const refreshCron = options.refreshCron || process.env.REFRESH_CRON || "0 */2 * * *";
+  const store = options.store || createStore();
+  const cronImpl = options.cronImpl || cron;
+  const log = options.log || console.log;
+  const errorLog = options.errorLog || console.error;
   await store.load();
-  await store.refresh();
 
-  cron.schedule(refreshCron, () => {
-    store.refresh().catch((error) => {
-      console.error("Scheduled refresh failed:", error);
+  const app = createApp(store, options.appOptions || {});
+  const server = app.listen(port);
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.once("listening", () => {
+      server.off("error", reject);
+      const address = server.address();
+      const actualPort = typeof address === "object" && address ? address.port : port;
+      log(`IPTV M3U Manager listening on port ${actualPort}`);
+      resolve();
     });
   });
 
-  const app = createApp(store);
-  app.listen(port, () => {
-    console.log(`IPTV M3U Manager listening on port ${port}`);
+  store.refresh().catch((error) => {
+    errorLog("Initial refresh failed:", error);
   });
+
+  cronImpl.schedule(refreshCron, () => {
+    store.refresh().catch((error) => {
+      errorLog("Scheduled refresh failed:", error);
+    });
+  });
+
+  return server;
 }
 
 const isDirectRun = process.argv[1] === fileURLToPath(import.meta.url);
