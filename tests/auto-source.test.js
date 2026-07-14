@@ -295,7 +295,8 @@ describe("auto source discovery", () => {
       enabled: true,
       pageUrl: "https://iptv.cqshushu.com/index.php",
       keywords: ["电信"],
-      maxPages: 1
+      maxPages: 1,
+      validateM3uUrls: false
     }, {
       fetchImpl: fetchMock,
       now: new Date("2026-07-13T12:00:00+08:00")
@@ -357,7 +358,8 @@ describe("auto source discovery", () => {
       enabled: true,
       pageUrl: "https://iptv.cqshushu.com/index.php",
       keywords: ["电信"],
-      maxPages: 1
+      maxPages: 1,
+      validateM3uUrls: false
     }, {
       fetchImpl: fetchMock,
       now: new Date("2026-07-13T12:00:00+08:00")
@@ -410,7 +412,8 @@ describe("auto source discovery", () => {
       enabled: true,
       pageUrl: "https://iptv.cqshushu.com/index.php",
       keywords: ["电信"],
-      maxPages: 1
+      maxPages: 1,
+      validateM3uUrls: false
     }, {
       fetchImpl: fetchMock,
       now: new Date("2026-07-13T12:00:00+08:00")
@@ -464,7 +467,8 @@ describe("auto source discovery", () => {
       enabled: true,
       pageUrl: "https://iptv.cqshushu.com/index.php",
       keywords: ["电信"],
-      maxPages: 1
+      maxPages: 1,
+      validateM3uUrls: false
     }, {
       fetchImpl: fetchMock,
       now: new Date("2026-07-13T12:00:00+08:00")
@@ -562,7 +566,8 @@ describe("auto source discovery", () => {
       pageUrl: "https://iptv.cqshushu.com/index.php",
       keywords: ["电信"],
       maxPages: 1,
-      detailRetryDelayMs: 4321
+      detailRetryDelayMs: 4321,
+      validateM3uUrls: false
     }, {
       fetchImpl: fetchMock,
       sleepImpl: async (ms) => waits.push(ms),
@@ -618,7 +623,8 @@ describe("auto source discovery", () => {
       keywords: ["电信"],
       maxPages: 1,
       uniqueByType: false,
-      detailDelayMs: 0
+      detailDelayMs: 0,
+      validateM3uUrls: false
     }, {
       fetchImpl: fetchMock,
       sleepImpl: async () => {},
@@ -629,6 +635,77 @@ describe("auto source discovery", () => {
       "http://iptv.cqshushu.com/index.php?s=same-real-sichuan&t=multicast&channels=1&format=m3u"
     ]);
     expect(result.warnings).toContain("已跳过 1 个重复 M3U 地址。");
+  });
+
+  test("skips resolved m3u urls that contain no channels", async () => {
+    const tableHtml = `
+      <table><tbody>
+      <tr>
+        <td><a onclick="gotoIP('listing-token','multicast')">171.98.232.148</a></td>
+        <td>376</td><td>Sichuan Telecom</td>
+        <td>2026-07-13 06:30</td><td>2026-07-13 17:00:00</td>
+        <td><span>OK</span></td>
+      </tr>
+      </tbody></table>
+    `;
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("?p=listing-token&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => '<a href="?s=empty-real-token&t=multicast" class="btn btn-play">open</a>'
+        };
+      }
+      if (url.includes("?s=empty-real-token&t=multicast") && !url.includes("format=m3u")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => `
+            <a href="#" onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=empty-real-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;" class="btn btn-play" title="copy M3U interface">M3U interface</a>
+          `
+        };
+      }
+      if (url.includes("format=m3u")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "#EXTM3U\n"
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => tableHtml
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      maxPages: 1,
+      todayOnly: false,
+      onlyStatus: "OK",
+      detailRetries: 0
+    }, {
+      fetchImpl: fetchMock,
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(result.sources).toEqual([]);
+    expect(result.warnings).toContain("已跳过 1 个无频道 M3U 地址。");
   });
 
   test("retries a rate-limited discovery page before giving up", async () => {

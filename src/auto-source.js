@@ -76,7 +76,8 @@ function normalizeAutoSourceConfig(value = {}) {
     detailDelayMs: parseBoundedInteger(value.detailDelayMs ?? "1200", 1200, 0, 10000),
     detailRetries: parseBoundedInteger(value.detailRetries ?? "1", 1, 0, 3),
     detailRetryDelayMs: parseBoundedInteger(value.detailRetryDelayMs ?? "5000", 5000, 0, 30000),
-    resolveDetailUrls: value.resolveDetailUrls !== false
+    resolveDetailUrls: value.resolveDetailUrls !== false,
+    validateM3uUrls: value.validateM3uUrls !== false
   };
 }
 
@@ -190,6 +191,11 @@ function readAttribute(tag, name) {
   return match ? match[1] : "";
 }
 
+function readCopyToClipboardUrl(tag) {
+  const match = String(tag || "").match(/copyToClipboard\(["']([^"']+)["']\)/i);
+  return match ? decodeHtmlEntities(match[1]) : "";
+}
+
 function isChannelListLink(label) {
   const text = stripTags(decodeHtmlEntities(label));
   return text.includes("查看频道列表") || text.includes("频道列表");
@@ -247,6 +253,35 @@ function parseChannelListM3uUrl(html = "", pageUrl = "https://iptv.cqshushu.com/
   }
 
   return "";
+}
+
+function summarizeTokenAnchors(html = "", pageUrl = "https://iptv.cqshushu.com/index.php", expectedToken = "") {
+  const anchors = [];
+  const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  for (const match of String(html).matchAll(anchorPattern)) {
+    const href = readAttribute(match[1], "href");
+    const copied = readCopyToClipboardUrl(match[1]);
+    const candidate = copied || href;
+    const normalizedM3u = normalizeCompleteM3uUrl(pageUrl, candidate);
+    const token = readSourceToken(pageUrl, candidate);
+    const text = stripTags(decodeHtmlEntities(match[2]));
+    const title = readAttribute(match[1], "title");
+    if (!href.includes("?s=") && !copied.includes("?s=") && !text.includes("M3U") && !title.includes("M3U")) {
+      continue;
+    }
+    anchors.push({
+      text,
+      title,
+      href,
+      copied,
+      token,
+      isPlayButton: /\bbtn-play\b/.test(match[1]),
+      isM3uInterface: isM3uInterfaceLink(`${match[1]} ${match[2]}`),
+      normalizedM3u,
+      matchesExpectedToken: Boolean(expectedToken && token === expectedToken)
+    });
+  }
+  return anchors;
 }
 
 async function fetchDiscoveryPage(fetchImpl, url, config) {
@@ -384,6 +419,31 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl) {
   return "";
 }
 
+async function checkM3uUrl(fetchImpl, url, referer, requestConfig) {
+  try {
+    const cookieHeader = requestConfig.cookieJar?.header();
+    const response = await fetchImpl(url, {
+      headers: {
+        "user-agent": "Mozilla/5.0 IPTV-M3U-Manager/1.0",
+        "accept": "*/*",
+        "referer": referer || requestConfig.pageUrl,
+        ...(cookieHeader ? { cookie: cookieHeader } : {})
+      }
+    });
+    if (!response.ok) {
+      return { ok: false, status: response.status, channelLines: 0 };
+    }
+    const text = await response.text();
+    return {
+      ok: true,
+      status: response.status,
+      channelLines: (text.match(/#EXTINF/g) || []).length
+    };
+  } catch (error) {
+    return { ok: false, error: error.message, channelLines: 0 };
+  }
+}
+
 function filterRows(rows, config, now = new Date()) {
   const today = todayInShanghai(now);
   const seenTypes = new Set();
@@ -482,9 +542,11 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
   const seenSourceUrls = new Set();
   let skippedWithoutDetailUrl = 0;
   let skippedDuplicateUrls = 0;
+  let skippedEmptyM3uUrls = 0;
   let detailIndex = 0;
   for (const row of selectedRows) {
     let sourceUrl = buildM3uUrl(config.pageUrl, row);
+    let resolvedFromDetail = false;
     if (config.resolveDetailUrls) {
       if (detailIndex > 0 && config.detailDelayMs > 0) {
         await sleepImpl(config.detailDelayMs);
@@ -493,8 +555,16 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
       const detailM3uUrl = await resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl);
       if (detailM3uUrl) {
         sourceUrl = detailM3uUrl;
+        resolvedFromDetail = true;
       } else {
         skippedWithoutDetailUrl += 1;
+        continue;
+      }
+    }
+    if (config.validateM3uUrls && resolvedFromDetail) {
+      const m3uCheck = await checkM3uUrl(fetchImpl, sourceUrl, config.pageUrl, requestConfig);
+      if (!m3uCheck.ok || m3uCheck.channelLines <= 0) {
+        skippedEmptyM3uUrls += 1;
         continue;
       }
     }
@@ -521,8 +591,100 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
   if (skippedDuplicateUrls > 0) {
     warnings.push(`已跳过 ${skippedDuplicateUrls} 个重复 M3U 地址。`);
   }
+  if (skippedEmptyM3uUrls > 0) {
+    warnings.push(`已跳过 ${skippedEmptyM3uUrls} 个无频道 M3U 地址。`);
+  }
 
   return { config, sources, rows: selectedRows, pages, warnings };
+}
+
+export async function debugAutoSourceByIp(configValue = {}, targetIp = "", options = {}) {
+  const config = normalizeAutoSourceConfig({ ...configValue, enabled: true });
+  const fetchImpl = options.fetchImpl || globalThis.fetch;
+  const sleepImpl = options.sleepImpl || sleep;
+  const now = options.now || new Date();
+  const cookieJar = createCookieJar();
+  const requestConfig = { ...config, cookieJar };
+  const pages = [];
+  const rows = [];
+
+  const endPage = config.startPage + config.maxPages - 1;
+  for (let page = config.startPage; page <= endPage; page += 1) {
+    const url = buildPageUrl(config.pageUrl, page);
+    if (!url) {
+      break;
+    }
+    let response = await fetchWithSession(fetchImpl, url, requestConfig);
+    for (let attempt = 0; isTransientDiscoveryStatus(response.status) && attempt < config.rateLimitRetries; attempt += 1) {
+      if (config.rateLimitDelayMs > 0) {
+        await sleepImpl(config.rateLimitDelayMs * (attempt + 1));
+      }
+      response = await fetchWithSession(fetchImpl, url, requestConfig);
+    }
+    if (!response.ok) {
+      pages.push({ page, url, rows: 0, error: `HTTP ${response.status}` });
+      break;
+    }
+    const html = await response.text();
+    const pageRows = parseTableRows(html);
+    pages.push({ page, url, rows: pageRows.length });
+    rows.push(...pageRows);
+    if (pageRows.some((row) => row.ip === targetIp) || !html.includes("下一页")) {
+      break;
+    }
+  }
+
+  const row = rows.find((item) => item.ip === targetIp) || null;
+  const result = { config, targetIp, today: todayInShanghai(now), pages, row };
+  if (!row) {
+    return result;
+  }
+
+  await ensureAdVerification(fetchImpl, config.pageUrl, requestConfig);
+  const detailUrl = buildDetailUrl(config.pageUrl, row);
+  const detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig);
+  const channelListUrl = detail.response.ok ? parseDetailChannelListUrl(detail.html, config.pageUrl) : "";
+  const expectedToken = readSourceToken(config.pageUrl, channelListUrl);
+  result.detail = {
+    url: detailUrl,
+    status: detail.response.status,
+    channelListUrl,
+    expectedToken,
+    anchors: summarizeTokenAnchors(detail.html, config.pageUrl, expectedToken)
+  };
+
+  if (!channelListUrl) {
+    return result;
+  }
+
+  const channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig);
+  const selectedM3uUrl = channelList.response.ok ? parseChannelListM3uUrl(channelList.html, config.pageUrl, expectedToken) : "";
+  result.channelList = {
+    url: channelListUrl,
+    status: channelList.response.status,
+    anchors: summarizeTokenAnchors(channelList.html, config.pageUrl, expectedToken),
+    selectedM3uUrl
+  };
+
+  if (selectedM3uUrl) {
+    const m3uResponse = await fetchImpl(selectedM3uUrl, {
+      headers: {
+        "user-agent": "Mozilla/5.0 IPTV-M3U-Manager/1.0",
+        "accept": "*/*",
+        "referer": channelListUrl
+      }
+    });
+    const text = await m3uResponse.text();
+    result.m3uCheck = {
+      url: selectedM3uUrl,
+      status: m3uResponse.status,
+      bytes: text.length,
+      channelLines: (text.match(/#EXTINF/g) || []).length,
+      head: text.slice(0, 160)
+    };
+  }
+
+  return result;
 }
 
 export { filterRows, normalizeAutoSourceConfig, parseTableRows, todayInShanghai };

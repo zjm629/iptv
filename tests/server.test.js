@@ -45,6 +45,15 @@ function createFakeStore(channelOverrides) {
       ],
       rows: []
     })),
+    debugAutoSourceByIp: jest.fn(async (_config, ip) => ({
+      targetIp: ip,
+      row: { ip },
+      detail: { expectedToken: "real-token" },
+      channelList: {
+        selectedM3uUrl: "http://iptv.cqshushu.com/index.php?s=real-token&t=multicast&channels=1&format=m3u"
+      },
+      m3uCheck: { channelLines: 376 }
+    })),
     saveChannelOverride: jest.fn(async (_id, override) => override),
     getCategories: jest.fn(() => ["推荐频道", "央视频道", "卫视频道"]),
     saveCategories: jest.fn(async (categories) => ["推荐频道", ...categories.filter((category) => category !== "推荐频道")]),
@@ -848,6 +857,34 @@ describe("server routes", () => {
     expect(response.status).toBe(200);
     expect(store.discoverAutoSources).toHaveBeenCalledWith({ enabled: true, keywords: ["电信"] });
     expect(response.body.sources[0].typeName).toBe("四川成都组播 四川电信");
+  });
+
+  test("returns detailed auto source debug output for a target ip", async () => {
+    const store = createFakeStore();
+    const response = await request(createApp(store))
+      .post("/api/auto-sources/debug")
+      .send({
+        ip: "171.98.232.148",
+        config: {
+          enabled: true,
+          pageUrl: "https://iptv.cqshushu.com/index.php",
+          keywords: []
+        }
+      });
+
+    expect(response.status).toBe(200);
+    expect(store.debugAutoSourceByIp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enabled: true,
+        pageUrl: "https://iptv.cqshushu.com/index.php",
+        keywords: []
+      }),
+      "171.98.232.148"
+    );
+    expect(response.body.targetIp).toBe("171.98.232.148");
+    expect(response.body.detail.expectedToken).toBe("real-token");
+    expect(response.body.channelList.selectedM3uUrl).toContain("format=m3u");
+    expect(response.body.m3uCheck.channelLines).toBe(376);
   });
 
   test("collects discovered auto sources into configured sources", async () => {

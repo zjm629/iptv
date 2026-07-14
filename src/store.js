@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { discoverAutoSources as discoverAutoSourcesFromPage, normalizeAutoSourceConfig } from "./auto-source.js";
+import { debugAutoSourceByIp, discoverAutoSources as discoverAutoSourcesFromPage, normalizeAutoSourceConfig } from "./auto-source.js";
 import { parseM3u } from "./m3u.js";
 import { normalizeChannelName } from "./normalize.js";
 
@@ -482,6 +482,9 @@ export function createStore(options = {}) {
     },
     async discoverAutoSources(config) {
       return discoverAutoSourcesFromPage(config || autoSourceConfig, { fetchImpl, now });
+    },
+    async debugAutoSourceByIp(config, ip) {
+      return debugAutoSourceByIp(config || autoSourceConfig, ip, { fetchImpl, now });
     },
     getCategories() {
       return normalizeCategories(overrides.categories);

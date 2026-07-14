@@ -422,6 +422,19 @@ export function createApp(store, options = {}) {
     }
   });
 
+  app.post("/api/auto-sources/debug", async (req, res) => {
+    try {
+      if (!store.debugAutoSourceByIp) {
+        res.status(404).json({ error: "Auto source debug is unavailable." });
+        return;
+      }
+      const result = await store.debugAutoSourceByIp(req.body?.config || req.body || {}, String(req.body?.ip || "").trim());
+      res.json(result);
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
   app.post("/api/auto-sources/collect", async (req, res) => {
     try {
       const currentSources = await store.getSources();
