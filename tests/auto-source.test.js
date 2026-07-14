@@ -445,6 +445,7 @@ describe("auto source discovery", () => {
           text: async () => `
             <script>copyToClipboard('http://iptv.cqshushu.com/index.php?s=wrong-empty-token&t=multicast&channels=1&format=m3u')</script>
             <div class="action-buttons">
+              <a href="#" onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=wrong-empty-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;" class="btn btn-play" title="复制 M3U 接口链接">M3U接口</a>
               <a href="#" onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=correct-channel-token&amp;t=multicast&amp;channels=1&amp;format=txt'); return false;" title="复制 TXT 接口链接">TXT接口</a>
               <a href="#" onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=correct-channel-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;" class="btn btn-play" title="复制 M3U 接口链接">M3U接口</a>
             </div>

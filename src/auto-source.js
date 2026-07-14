@@ -161,6 +161,18 @@ function normalizeCompleteM3uUrl(pageUrl, value) {
   return url.toString();
 }
 
+function readSourceToken(pageUrl, value) {
+  if (!value) {
+    return "";
+  }
+  try {
+    const url = new URL(decodeHtmlEntities(value), buildBaseIndexUrl(pageUrl));
+    return url.searchParams.get("s") || "";
+  } catch (_error) {
+    return "";
+  }
+}
+
 function normalizeChannelListUrl(pageUrl, value) {
   if (!value) {
     return "";
@@ -205,7 +217,7 @@ function parseDetailChannelListUrl(html = "", pageUrl = "https://iptv.cqshushu.c
   return "";
 }
 
-function parseChannelListM3uUrl(html = "", pageUrl = "https://iptv.cqshushu.com/index.php") {
+function parseChannelListM3uUrl(html = "", pageUrl = "https://iptv.cqshushu.com/index.php", expectedToken = "") {
   const source = String(html);
   const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
   for (const match of source.matchAll(anchorPattern)) {
@@ -216,12 +228,12 @@ function parseChannelListM3uUrl(html = "", pageUrl = "https://iptv.cqshushu.com/
 
     const clickMatch = match[1].match(/copyToClipboard\(["']([^"']+)["']\)/i);
     const copiedUrl = normalizeCompleteM3uUrl(pageUrl, clickMatch?.[1] || "");
-    if (copiedUrl) {
+    if (copiedUrl && (!expectedToken || readSourceToken(pageUrl, copiedUrl) === expectedToken)) {
       return copiedUrl;
     }
 
     const hrefUrl = normalizeCompleteM3uUrl(pageUrl, readAttribute(match[1], "href"));
-    if (hrefUrl) {
+    if (hrefUrl && (!expectedToken || readSourceToken(pageUrl, hrefUrl) === expectedToken)) {
       return hrefUrl;
     }
   }
@@ -229,7 +241,7 @@ function parseChannelListM3uUrl(html = "", pageUrl = "https://iptv.cqshushu.com/
   const inlinePattern = /(https?:\/\/[^"'<> \n]+\/index\.php\?[^"'<> \n]*format=m3u[^"'<> \n]*|\?s=[^"'<> \n]*format=m3u[^"'<> \n]*)/gi;
   for (const match of source.matchAll(inlinePattern)) {
     const url = normalizeCompleteM3uUrl(pageUrl, match[1]);
-    if (url) {
+    if (url && (!expectedToken || readSourceToken(pageUrl, url) === expectedToken)) {
       return url;
     }
   }
@@ -363,7 +375,8 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl) {
     }
 
     const channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig);
-    const m3uUrl = channelList.response.ok ? parseChannelListM3uUrl(channelList.html, requestConfig.pageUrl) : "";
+    const expectedToken = readSourceToken(requestConfig.pageUrl, channelListUrl);
+    const m3uUrl = channelList.response.ok ? parseChannelListM3uUrl(channelList.html, requestConfig.pageUrl, expectedToken) : "";
     if (m3uUrl) {
       return m3uUrl;
     }
