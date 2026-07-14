@@ -853,7 +853,7 @@ export function renderCollectorPage() {
     }
     .result-row {
       display: grid;
-      grid-template-columns: auto minmax(180px, 280px) 1fr auto;
+      grid-template-columns: auto minmax(180px, 280px) minmax(180px, 260px) 1fr auto;
       gap: 10px;
       align-items: center;
       padding-top: 8px;
@@ -861,6 +861,12 @@ export function renderCollectorPage() {
       overflow-wrap: anywhere;
       color: var(--muted);
       font-size: 14px;
+    }
+    .result-meta {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
     }
     .warning { color: var(--danger); }
     @media (max-width: 760px) {
@@ -944,7 +950,12 @@ export function renderCollectorPage() {
           "<div class='result-row'>" +
           "<input class='result-check' type='checkbox' checked data-url='" + escapeHtml(source.url) + "'>" +
           "<strong>" + escapeHtml(source.typeName || source.name) + "</strong>" +
-          "<span>" + escapeHtml(source.url) + (source.updatedAt ? " · " + escapeHtml(source.updatedAt) : "") + "</span>" +
+          "<span class='result-meta'>" +
+          (source.channelCount ? "<span>频道数：" + escapeHtml(source.channelCount) + "</span>" : "<span>频道数：未知</span>") +
+          (source.updatedAt ? "<span>更新时间：" + escapeHtml(source.updatedAt) + "</span>" : "<span>更新时间：未知</span>") +
+          (source.ip ? "<span>IP：" + escapeHtml(source.ip) + "</span>" : "") +
+          "</span>" +
+          "<span>" + escapeHtml(source.url) + "</span>" +
           "<button class='secondary test-potplayer' data-url='" + escapeHtml(source.url) + "'>PotPlayer测试</button>" +
           "</div>"
         ).join("")

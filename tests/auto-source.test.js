@@ -106,7 +106,10 @@ describe("auto source discovery", () => {
         name: "自动-四川成都组播 四川电信",
         url: "https://iptv.cqshushu.com/index.php?s=top-sichuan&t=multicast&channels=1&format=m3u",
         auto: true,
-        typeName: "四川成都组播 四川电信"
+        typeName: "四川成都组播 四川电信",
+        channelCount: "200",
+        ip: "1.1.1.1",
+        updatedAt: "2026-07-13 17:00:00"
       })
     ]);
   });
@@ -361,6 +364,59 @@ describe("auto source discovery", () => {
     });
 
     expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=real-channel-list-token&t=multicast&channels=1&format=m3u");
+  });
+
+  test("resolves the m3u interface from structural buttons when labels vary", async () => {
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("?p=top-sichuan&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => `
+            <a href="?s=wrong-token&t=multicast">other token</a>
+            <a href="?s=button-channel-token&t=multicast" class="btn btn-play">open</a>
+          `
+        };
+      }
+      if (url.includes("?s=button-channel-token&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => `
+            <a href="#" onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=button-channel-token&amp;t=multicast&amp;channels=1&amp;format=txt'); return false;">txt</a>
+            <a href="#" onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=button-channel-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;">copy</a>
+          `
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => SAMPLE_HTML
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: ["电信"],
+      maxPages: 1
+    }, {
+      fetchImpl: fetchMock,
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=button-channel-token&t=multicast&channels=1&format=m3u");
   });
 
   test("skips sources when the detail page does not expose a real m3u token", async () => {

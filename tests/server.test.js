@@ -919,6 +919,8 @@ describe("server routes", () => {
     expect(response.text).toContain("select-all");
     expect(response.text).toContain("PotPlayer测试");
     expect(response.text).toContain("potplayer://");
+    expect(response.text).toContain("频道数");
+    expect(response.text).toContain("更新时间");
   });
 
   test("serves web management page with valid inline scripts", () => {

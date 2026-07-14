@@ -193,7 +193,9 @@ function parseDetailChannelListUrl(html = "", pageUrl = "https://iptv.cqshushu.c
   const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
   for (const match of source.matchAll(anchorPattern)) {
     const href = readAttribute(match[1], "href");
-    if (isChannelListLink(`${match[1]} ${match[2]}`)) {
+    const label = `${match[1]} ${match[2]}`;
+    const isPlayButton = /\bbtn-play\b/.test(match[1]) || /\bdownload-btn\s+m3u\b/.test(match[1]);
+    if (isPlayButton || isChannelListLink(label)) {
       const url = normalizeChannelListUrl(pageUrl, href);
       if (url) {
         return url;
@@ -205,6 +207,14 @@ function parseDetailChannelListUrl(html = "", pageUrl = "https://iptv.cqshushu.c
 
 function parseChannelListM3uUrl(html = "", pageUrl = "https://iptv.cqshushu.com/index.php") {
   const source = String(html);
+  const copyPattern = /copyToClipboard\(["']([^"']*format=m3u[^"']*)["']\)/gi;
+  for (const match of source.matchAll(copyPattern)) {
+    const copiedUrl = normalizeCompleteM3uUrl(pageUrl, match[1]);
+    if (copiedUrl) {
+      return copiedUrl;
+    }
+  }
+
   const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
   for (const match of source.matchAll(anchorPattern)) {
     const label = `${match[1]} ${match[2]}`;
@@ -492,7 +502,10 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
       name: `自动-${row.typeName}`,
       url: sourceUrl,
       auto: true,
+      ip: row.ip,
+      channelCount: row.channelCount,
       typeName: row.typeName,
+      onlineAt: row.onlineAt,
       updatedAt: row.updatedAt,
       status: row.status
     });
