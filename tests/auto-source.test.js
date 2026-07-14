@@ -276,7 +276,14 @@ describe("auto source discovery", () => {
         if (!options.headers?.cookie?.includes("ad_ok=1")) {
           return response(200, '<title>验证中...</title><script src="https://iptv.cqshushu.com/ad_verify.php"></script>');
         }
-        return response(200, '<a href="?s=real-sichuan&t=multicast">M3U接口</a>');
+        return response(200, '<a href="?s=real-sichuan&t=multicast">📺 查看频道列表</a>');
+      }
+      if (url.includes("?s=real-sichuan&t=multicast")) {
+        return response(200, `
+          <a href="#"
+             onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=real-sichuan&t=multicast&channels=1&format=m3u'); return false;"
+             title="复制 M3U 接口链接">🔗 M3U接口</a>
+        `);
       }
       return response(200, SAMPLE_HTML);
     };
@@ -294,10 +301,66 @@ describe("auto source discovery", () => {
     expect(requested).toEqual([
       "https://iptv.cqshushu.com/index.php",
       "https://iptv.cqshushu.com/ad_verify.php",
-      "https://iptv.cqshushu.com/index.php?p=top-sichuan&t=multicast"
+      "https://iptv.cqshushu.com/index.php?p=top-sichuan&t=multicast",
+      "https://iptv.cqshushu.com/index.php?s=real-sichuan&t=multicast"
     ]);
     expect(cookieHeaders[2]).toContain("ad_ok=1");
-    expect(result.sources[0].url).toBe("https://iptv.cqshushu.com/index.php?s=real-sichuan&t=multicast&channels=1&format=m3u");
+    expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=real-sichuan&t=multicast&channels=1&format=m3u");
+  });
+
+  test("prefers the detail page channel list link over other token links", async () => {
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("?p=top-sichuan&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => `
+            <a href="?s=empty-listing-token&t=multicast">TXT接口</a>
+            <a href="?s=real-channel-list-token&t=multicast">📺 查看频道列表</a>
+          `
+        };
+      }
+      if (url.includes("?s=real-channel-list-token&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => `
+            <a href="?s=real-channel-list-token&t=multicast&channels=1&download=m3u">M3U下载</a>
+            <a href="#"
+               onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=real-channel-list-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;"
+               title="复制 M3U 接口链接">🔗 M3U接口</a>
+          `
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => SAMPLE_HTML
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: ["电信"],
+      maxPages: 1
+    }, {
+      fetchImpl: fetchMock,
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=real-channel-list-token&t=multicast&channels=1&format=m3u");
   });
 
   test("skips sources when the detail page does not expose a real m3u token", async () => {
@@ -361,7 +424,19 @@ describe("auto source discovery", () => {
           headers: { get: () => null },
           text: async () => detailRequests === 1
             ? "<html>checking</html>"
-            : '<a href="?s=retry-real-sichuan&t=multicast">M3U接口</a>'
+            : '<a href="?s=retry-real-sichuan&t=multicast">📺 查看频道列表</a>'
+        };
+      }
+      if (url.includes("?s=retry-real-sichuan&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => `
+            <a href="#"
+               onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=retry-real-sichuan&t=multicast&channels=1&format=m3u'); return false;"
+               title="复制 M3U 接口链接">🔗 M3U接口</a>
+          `
         };
       }
       return {
@@ -386,7 +461,7 @@ describe("auto source discovery", () => {
 
     expect(waits).toEqual([4321]);
     expect(result.warnings).toEqual([]);
-    expect(result.sources[0].url).toBe("https://iptv.cqshushu.com/index.php?s=retry-real-sichuan&t=multicast&channels=1&format=m3u");
+    expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=retry-real-sichuan&t=multicast&channels=1&format=m3u");
   });
 
   test("deduplicates sources that resolve to the same real m3u url", async () => {
@@ -404,7 +479,19 @@ describe("auto source discovery", () => {
           ok: true,
           status: 200,
           headers: { get: () => null },
-          text: async () => '<a href="?s=same-real-sichuan&t=multicast">M3U接口</a>'
+          text: async () => '<a href="?s=same-real-sichuan&t=multicast">📺 查看频道列表</a>'
+        };
+      }
+      if (url.includes("?s=same-real-sichuan&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => `
+            <a href="#"
+               onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=same-real-sichuan&t=multicast&channels=1&format=m3u'); return false;"
+               title="复制 M3U 接口链接">🔗 M3U接口</a>
+          `
         };
       }
       return {
@@ -429,7 +516,7 @@ describe("auto source discovery", () => {
     });
 
     expect(result.sources.map((source) => source.url)).toEqual([
-      "https://iptv.cqshushu.com/index.php?s=same-real-sichuan&t=multicast&channels=1&format=m3u"
+      "http://iptv.cqshushu.com/index.php?s=same-real-sichuan&t=multicast&channels=1&format=m3u"
     ]);
     expect(result.warnings).toContain("已跳过 1 个重复 M3U 地址。");
   });

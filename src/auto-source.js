@@ -144,19 +144,89 @@ function normalizeM3uUrl(pageUrl, value) {
   return url.toString();
 }
 
-function parseDetailM3uUrl(html = "", pageUrl = "https://iptv.cqshushu.com/index.php") {
+function normalizeCompleteM3uUrl(pageUrl, value) {
+  if (!value) {
+    return "";
+  }
+  const url = new URL(decodeHtmlEntities(value), buildBaseIndexUrl(pageUrl));
+  if (!url.searchParams.has("s") || !url.searchParams.has("t")) {
+    return "";
+  }
+  if (url.searchParams.get("format") !== "m3u") {
+    return "";
+  }
+  if (url.searchParams.get("channels") !== "1") {
+    return "";
+  }
+  return url.toString();
+}
+
+function normalizeChannelListUrl(pageUrl, value) {
+  if (!value) {
+    return "";
+  }
+  const url = new URL(decodeHtmlEntities(value), buildBaseIndexUrl(pageUrl));
+  if (!url.searchParams.has("s") || !url.searchParams.has("t")) {
+    return "";
+  }
+  return url.toString();
+}
+
+function readAttribute(tag, name) {
+  const pattern = new RegExp(`${name}\\s*=\\s*["']([^"']*)["']`, "i");
+  const match = String(tag || "").match(pattern);
+  return match ? match[1] : "";
+}
+
+function isChannelListLink(label) {
+  const text = stripTags(decodeHtmlEntities(label));
+  return text.includes("查看频道列表") || text.includes("频道列表");
+}
+
+function isM3uInterfaceLink(label) {
+  const text = stripTags(decodeHtmlEntities(label));
+  return /M3U\s*接口/i.test(text);
+}
+
+function parseDetailChannelListUrl(html = "", pageUrl = "https://iptv.cqshushu.com/index.php") {
   const source = String(html);
-  const attributePattern = /(?:href|value|data-url)=["']([^"']*\?s=[^"']*)["']/gi;
-  for (const match of source.matchAll(attributePattern)) {
-    const url = normalizeM3uUrl(pageUrl, match[1]);
-    if (url) {
-      return url;
+  const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  for (const match of source.matchAll(anchorPattern)) {
+    const href = readAttribute(match[1], "href");
+    if (isChannelListLink(`${match[1]} ${match[2]}`)) {
+      const url = normalizeChannelListUrl(pageUrl, href);
+      if (url) {
+        return url;
+      }
+    }
+  }
+  return "";
+}
+
+function parseChannelListM3uUrl(html = "", pageUrl = "https://iptv.cqshushu.com/index.php") {
+  const source = String(html);
+  const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  for (const match of source.matchAll(anchorPattern)) {
+    const label = `${match[1]} ${match[2]}`;
+    if (!isM3uInterfaceLink(label)) {
+      continue;
+    }
+
+    const clickMatch = match[1].match(/copyToClipboard\(["']([^"']+)["']\)/i);
+    const copiedUrl = normalizeCompleteM3uUrl(pageUrl, clickMatch?.[1] || "");
+    if (copiedUrl) {
+      return copiedUrl;
+    }
+
+    const hrefUrl = normalizeCompleteM3uUrl(pageUrl, readAttribute(match[1], "href"));
+    if (hrefUrl) {
+      return hrefUrl;
     }
   }
 
-  const inlinePattern = /(https?:\/\/[^"'<> \n]+\/index\.php\?[^"'<> \n]*s=[^"'<> \n]*|\?s=[^"'<> \n]*)/gi;
+  const inlinePattern = /(https?:\/\/[^"'<> \n]+\/index\.php\?[^"'<> \n]*format=m3u[^"'<> \n]*|\?s=[^"'<> \n]*format=m3u[^"'<> \n]*)/gi;
   for (const match of source.matchAll(inlinePattern)) {
-    const url = normalizeM3uUrl(pageUrl, match[1]);
+    const url = normalizeCompleteM3uUrl(pageUrl, match[1]);
     if (url) {
       return url;
     }
@@ -285,9 +355,15 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl) {
       await sleepImpl(requestConfig.detailRetryDelayMs * attempt);
     }
     const detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig);
-    const detailM3uUrl = detail.response.ok ? parseDetailM3uUrl(detail.html, requestConfig.pageUrl) : "";
-    if (detailM3uUrl) {
-      return detailM3uUrl;
+    const channelListUrl = detail.response.ok ? parseDetailChannelListUrl(detail.html, requestConfig.pageUrl) : "";
+    if (!channelListUrl) {
+      continue;
+    }
+
+    const channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig);
+    const m3uUrl = channelList.response.ok ? parseChannelListM3uUrl(channelList.html, requestConfig.pageUrl) : "";
+    if (m3uUrl) {
+      return m3uUrl;
     }
   }
   return "";
