@@ -535,6 +535,73 @@ describe("auto source discovery", () => {
     expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=real-browser-token&t=multicast&channels=1&format=m3u");
   });
 
+  test("clicks the source IP from the listing page before reading protected detail pages", async () => {
+    const clicked = [];
+    const renderedUrls = [];
+    const tableHtml = `
+      <table><tbody>
+      <tr>
+        <td><a onclick="gotoIP('click-token','multicast')">1.1.1.1</a></td>
+        <td>200</td><td>Sichuan Telecom</td>
+        <td>2026-07-13 06:30</td><td>2026-07-13 17:00:00</td>
+        <td><span>OK</span></td>
+      </tr>
+      </tbody></table>
+    `;
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => tableHtml
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      maxPages: 1,
+      todayOnly: false,
+      onlyStatus: "OK",
+      browserFetch: true,
+      detailRetries: 0,
+      validateM3uUrls: false
+    }, {
+      fetchImpl: fetchMock,
+      browserClickHtmlImpl: async ({ startUrl, detailUrl, row }) => {
+        clicked.push({ startUrl, detailUrl, ip: row.ip });
+        return '<a href="?s=real-click-token&t=multicast">查看频道列表</a>';
+      },
+      browserHtmlImpl: async (url) => {
+        renderedUrls.push(url);
+        if (url.includes("?s=real-click-token&t=multicast")) {
+          return `
+            <a href="#" onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=real-click-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;" title="M3U interface">M3U interface</a>
+          `;
+        }
+        return "<title>IPTV神器Pro</title><body>返回首页</body>";
+      },
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(clicked).toEqual([{
+      startUrl: "https://iptv.cqshushu.com/index.php",
+      detailUrl: "https://iptv.cqshushu.com/index.php?p=click-token&t=multicast",
+      ip: "1.1.1.1"
+    }]);
+    expect(renderedUrls).toEqual(["https://iptv.cqshushu.com/index.php?s=real-click-token&t=multicast"]);
+    expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=real-click-token&t=multicast&channels=1&format=m3u");
+  });
+
   test("does not fall back to decoy fetch detail pages when browser rendering fails", async () => {
     const fetchUrls = [];
     const tableHtml = `

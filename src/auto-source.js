@@ -606,6 +606,59 @@ async function fetchHtmlWithBrowser(url, requestConfig, browserReferrer = "") {
   };
 }
 
+async function fetchDetailHtmlByClick(row, detailUrl, requestConfig) {
+  const startUrl = row.discoveryPageUrl || requestConfig.pageUrl;
+  if (!requestConfig.browserFetch || !startUrl) {
+    return null;
+  }
+
+  if (typeof requestConfig.browserClickHtmlImpl === "function") {
+    const html = await requestConfig.browserClickHtmlImpl({ startUrl, detailUrl, row, requestConfig });
+    return {
+      response: { ok: true, status: 200 },
+      html,
+      finalUrl: detailUrl,
+      browser: true,
+      clicked: true
+    };
+  }
+
+  const candidates = [
+    process.env.CHROMIUM_PATH,
+    "chromium-browser",
+    "chromium",
+    "google-chrome"
+  ].filter(Boolean);
+
+  const errors = [];
+  for (const command of candidates) {
+    try {
+      const rendered = await renderHtmlWithChromiumClick(command, startUrl, row, requestConfig);
+      if (!rendered.html.trim()) {
+        errors.push(`${command}: empty clicked html`);
+        continue;
+      }
+      return {
+        response: { ok: true, status: 200 },
+        html: rendered.html,
+        finalUrl: rendered.finalUrl,
+        browser: true,
+        clicked: true
+      };
+    } catch (error) {
+      const detail = error?.stderr || error?.message || error?.code || "unknown error";
+      errors.push(`${command}: ${String(detail).trim().slice(0, 240)}`);
+      if (error?.code === "ENOENT") {
+        continue;
+      }
+    }
+  }
+
+  return {
+    error: `Chromium click rendering failed for ${detailUrl}: ${errors.join("; ") || "no chromium executable found"}`
+  };
+}
+
 function waitForProcessOutput(process, pattern, timeoutMs) {
   return new Promise((resolve, reject) => {
     let output = "";
@@ -774,6 +827,91 @@ async function renderHtmlWithChromium(command, url, requestConfig, browserReferr
   }
 }
 
+async function renderHtmlWithChromiumClick(command, startUrl, row, requestConfig) {
+  const args = [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--disable-dev-shm-usage",
+    "--disable-blink-features=AutomationControlled",
+    "--disable-extensions",
+    "--remote-debugging-port=0",
+    ...(requestConfig.browserDataDir ? [`--user-data-dir=${requestConfig.browserDataDir}`] : []),
+    "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "about:blank"
+  ];
+  const chrome = spawn(command, args, { stdio: ["ignore", "ignore", "pipe"] });
+  let client;
+  try {
+    const wsUrl = await waitForProcessOutput(chrome, /DevTools listening on (ws:\/\/[^\s]+)/, Math.min(10000, requestConfig.browserTimeoutMs));
+    client = createCdpClient(wsUrl);
+    const { targetId } = await client.send("Target.createTarget", { url: "about:blank" });
+    const { sessionId } = await client.send("Target.attachToTarget", { targetId, flatten: true });
+    await client.send("Page.enable", {}, sessionId);
+    await client.send("Runtime.enable", {}, sessionId);
+    await client.send("Page.addScriptToEvaluateOnNewDocument", { source: STEALTH_SCRIPT }, sessionId);
+    await client.send("Page.navigate", { url: startUrl }, sessionId);
+    await waitForStablePage(client, sessionId, requestConfig, startUrl);
+
+    const clickResult = await client.send("Runtime.evaluate", {
+      expression: `(() => {
+        const wantedIp = ${JSON.stringify(row.ip)};
+        const wantedToken = ${JSON.stringify(row.token)};
+        const wantedType = ${JSON.stringify(row.sourceType)};
+        const links = Array.from(document.querySelectorAll("a"));
+        const link = links.find((item) => {
+          const onclick = item.getAttribute("onclick") || "";
+          const text = (item.textContent || "").trim();
+          return onclick.includes("gotoIP") && onclick.includes(wantedToken) && onclick.includes(wantedType) ||
+            (text === wantedIp && onclick.includes("gotoIP"));
+        });
+        if (!link) {
+          return { clicked: false, href: location.href, linkCount: links.length, text: document.body ? document.body.innerText.slice(0, 240) : "" };
+        }
+        link.scrollIntoView({ block: "center" });
+        link.click();
+        return { clicked: true, href: location.href, text: link.textContent || "", onclick: link.getAttribute("onclick") || "" };
+      })()`,
+      returnByValue: true
+    }, sessionId);
+    const clicked = clickResult?.result?.value;
+    if (!clicked?.clicked) {
+      throw new Error(`Could not find source IP link on list page: ${JSON.stringify(clicked || {})}`);
+    }
+    return waitForStablePage(client, sessionId, requestConfig, startUrl, { requireUrlChange: true });
+  } finally {
+    client?.close();
+    if (!chrome.killed) {
+      chrome.kill("SIGKILL");
+    }
+  }
+}
+
+async function waitForStablePage(client, sessionId, requestConfig, fallbackUrl = "", options = {}) {
+  const deadline = Date.now() + requestConfig.browserTimeoutMs;
+  let lastHtml = "";
+  let lastFinalUrl = fallbackUrl;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const evaluated = await client.send("Runtime.evaluate", {
+      expression: "({ html: document.documentElement ? document.documentElement.outerHTML : '', text: document.body ? document.body.innerText : '', href: location.href, readyState: document.readyState })",
+      returnByValue: true
+    }, sessionId);
+    const value = evaluated?.result?.value || {};
+    lastHtml = value.html || lastHtml;
+    lastFinalUrl = value.href || lastFinalUrl;
+    const text = value.text || "";
+    const stillChecking = text.includes("安全验证中") || text.includes("正在确认您的浏览器安全环境");
+    if (options.requireUrlChange && lastFinalUrl === fallbackUrl) {
+      continue;
+    }
+    if (lastHtml && value.readyState === "complete" && !stillChecking) {
+      return { html: lastHtml, finalUrl: lastFinalUrl };
+    }
+  }
+  return { html: lastHtml, finalUrl: lastFinalUrl };
+}
+
 async function ensureAdVerification(fetchImpl, pageUrl, requestConfig) {
   try {
     const verifyUrl = new URL("/ad_verify.php", pageUrl).toString();
@@ -826,7 +964,18 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
         detailUrl,
         message: `获取详情页：${row.ip}`
       });
-      detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig, row.discoveryPageUrl || requestConfig.pageUrl);
+      const shouldClickFromList = requestConfig.browserFetch && row.discoveryPageUrl &&
+        (typeof requestConfig.browserClickHtmlImpl === "function" || !requestConfig.browserHtmlImpl);
+      if (shouldClickFromList) {
+        const clickedDetail = await fetchDetailHtmlByClick(row, detailUrl, requestConfig);
+        if (clickedDetail?.html !== undefined) {
+          detail = clickedDetail;
+        } else {
+          throw new Error(clickedDetail?.error || "Chromium click rendering failed");
+        }
+      } else {
+        detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig, row.discoveryPageUrl || requestConfig.pageUrl);
+      }
       report({
         phase: "source:detail-loaded",
         ip: row.ip,
@@ -834,8 +983,9 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
         attempt: attempt + 1,
         detailUrl,
         finalUrl: detail.finalUrl,
+        clicked: detail.clicked === true,
         browser: detail.browser === true,
-        message: `详情页已读取：${row.ip}${detail.browser ? "（Chromium 渲染）" : ""}`
+        message: `详情页已读取：${row.ip}${detail.browser ? "（Chromium 渲染）" : ""}${detail.clicked ? "（列表页点击）" : ""}`
       });
     } catch (error) {
       throwIfAborted(requestConfig.abortSignal);
@@ -1067,6 +1217,7 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
   let useFallbackBase = false;
   const cookieJar = createCookieJar();
   const requestConfig = { ...config, cookieJar, abortSignal: options.signal, browserHtmlImpl: options.browserHtmlImpl };
+  requestConfig.browserClickHtmlImpl = options.browserClickHtmlImpl;
   const browserDataDir = config.browserFetch && !options.browserHtmlImpl ? await createBrowserDataDir() : "";
   if (browserDataDir) {
     requestConfig.browserDataDir = browserDataDir;
@@ -1415,6 +1566,7 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
   const now = options.now || new Date();
   const cookieJar = createCookieJar();
   const requestConfig = { ...config, cookieJar, browserHtmlImpl: options.browserHtmlImpl };
+  requestConfig.browserClickHtmlImpl = options.browserClickHtmlImpl;
   const browserDataDir = config.browserFetch && !options.browserHtmlImpl ? await createBrowserDataDir() : "";
   if (browserDataDir) {
     requestConfig.browserDataDir = browserDataDir;
@@ -1467,7 +1619,18 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
   const detailUrl = buildDetailUrl(config.pageUrl, row);
   let detail;
   try {
-    detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig, row.discoveryPageUrl || config.pageUrl);
+    const shouldClickFromList = config.browserFetch && row.discoveryPageUrl &&
+      (typeof requestConfig.browserClickHtmlImpl === "function" || !requestConfig.browserHtmlImpl);
+    if (shouldClickFromList) {
+      const clickedDetail = await fetchDetailHtmlByClick(row, detailUrl, requestConfig);
+      if (clickedDetail?.html !== undefined) {
+        detail = clickedDetail;
+      } else {
+        throw new Error(clickedDetail?.error || "Chromium click rendering failed");
+      }
+    } else {
+      detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig, row.discoveryPageUrl || config.pageUrl);
+    }
   } catch (error) {
     result.detail = {
       url: detailUrl,
