@@ -451,6 +451,146 @@ describe("auto source discovery", () => {
     expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=button-channel-token&t=multicast&channels=1&format=m3u");
   });
 
+  test("uses browser-rendered detail pages when source protection returns decoy links to fetch", async () => {
+    const browserUrls = [];
+    const tableHtml = `
+      <table><tbody>
+      <tr>
+        <td><a onclick="gotoIP('top-sichuan','multicast')">1.1.1.1</a></td>
+        <td>200</td><td>Sichuan Telecom</td>
+        <td>2026-07-13 06:30</td><td>2026-07-13 17:00:00</td>
+        <td><span>OK</span></td>
+      </tr>
+      </tbody></table>
+    `;
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("?p=top-sichuan&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => '<a href="?s=random-empty-token&t=multicast">查看频道列表</a>'
+        };
+      }
+      if (url.includes("?s=real-browser-token&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => `
+            <a href="#" onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=real-browser-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;" title="M3U interface">M3U interface</a>
+          `
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => tableHtml
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      maxPages: 1,
+      todayOnly: false,
+      onlyStatus: "OK",
+      browserFetch: true,
+      detailRetries: 0,
+      validateM3uUrls: false
+    }, {
+      fetchImpl: fetchMock,
+      browserHtmlImpl: async (url) => {
+        browserUrls.push(url);
+        if (url.includes("?p=top-sichuan&t=multicast")) {
+          return '<a href="?s=real-browser-token&t=multicast">查看频道列表</a>';
+        }
+        return `
+          <a href="#" onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=real-browser-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;" title="M3U interface">M3U interface</a>
+        `;
+      },
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(browserUrls).toEqual([
+      "https://iptv.cqshushu.com/index.php?p=top-sichuan&t=multicast",
+      "https://iptv.cqshushu.com/index.php?s=real-browser-token&t=multicast"
+    ]);
+    expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=real-browser-token&t=multicast&channels=1&format=m3u");
+  });
+
+  test("does not fall back to decoy fetch detail pages when browser rendering fails", async () => {
+    const fetchUrls = [];
+    const tableHtml = `
+      <table><tbody>
+      <tr>
+        <td><a onclick="gotoIP('top-sichuan','multicast')">1.1.1.1</a></td>
+        <td>200</td><td>Sichuan Telecom</td>
+        <td>2026-07-13 06:30</td><td>2026-07-13 17:00:00</td>
+        <td><span>OK</span></td>
+      </tr>
+      </tbody></table>
+    `;
+    const fetchMock = async (url) => {
+      fetchUrls.push(url);
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("?p=top-sichuan&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => '<a href="?s=random-empty-token&t=multicast">查看频道列表</a>'
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => tableHtml
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      maxPages: 1,
+      todayOnly: false,
+      onlyStatus: "OK",
+      browserFetch: true,
+      detailRetries: 0,
+      validateM3uUrls: false
+    }, {
+      fetchImpl: fetchMock,
+      browserHtmlImpl: async () => {
+        throw new Error("chromium unavailable");
+      },
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(result.sources).toEqual([]);
+    expect(fetchUrls.some((url) => url.includes("?p=top-sichuan&t=multicast"))).toBe(false);
+    expect(result.skippedSources[0].reason).toBe("detail-missing");
+    expect(result.skippedSources[0].message).toBe("未取到真实 M3U 接口");
+  });
+
   test("ignores unrelated copied m3u urls before the m3u interface button", async () => {
     const fetchMock = async (url) => {
       if (url.endsWith("/ad_verify.php")) {

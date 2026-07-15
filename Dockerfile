@@ -2,7 +2,7 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-RUN apk add --no-cache ffmpeg
+RUN apk add --no-cache chromium ffmpeg
 
 RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
@@ -14,6 +14,7 @@ RUN node -e "const fs=require('fs');let commit=process.env.APP_VERSION||'unknown
 
 ENV NODE_ENV=production
 ENV PORT=3080
+ENV CHROMIUM_PATH=/usr/bin/chromium-browser
 
 EXPOSE 3080
 

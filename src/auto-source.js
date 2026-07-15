@@ -1,3 +1,8 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+
 function todayInShanghai(now = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Shanghai",
@@ -81,6 +86,8 @@ function normalizeAutoSourceConfig(value = {}) {
     emptyM3uResolveRetries: parseBoundedInteger(value.emptyM3uResolveRetries ?? "0", 0, 0, 5),
     emptyM3uResolveDelayMs: parseBoundedInteger(value.emptyM3uResolveDelayMs ?? "8000", 8000, 0, 60000),
     requestTimeoutMs: parseBoundedInteger(value.requestTimeoutMs ?? "15000", 15000, 1, 120000),
+    browserFetch: value.browserFetch === true || process.env.COLLECTOR_BROWSER_FETCH === "true",
+    browserTimeoutMs: parseBoundedInteger(value.browserTimeoutMs ?? "25000", 25000, 1000, 120000),
     browserProfile: value.browserProfile !== false,
     resolveDetailUrls: value.resolveDetailUrls !== false,
     validateM3uUrls: value.validateM3uUrls !== false
@@ -483,6 +490,14 @@ async function fetchWithSession(fetchImpl, url, requestConfig) {
 }
 
 async function fetchHtmlWithSession(fetchImpl, url, requestConfig) {
+  if (requestConfig.browserFetch) {
+    const browserResult = await fetchHtmlWithBrowser(url, requestConfig);
+    if (browserResult?.html !== undefined) {
+      return browserResult;
+    }
+    throw new Error(browserResult?.error || "Chromium browser rendering failed");
+  }
+
   let response = await fetchWithSession(fetchImpl, url, requestConfig);
   if (!response.ok) {
     return { response, html: "" };
@@ -503,6 +518,65 @@ async function fetchHtmlWithSession(fetchImpl, url, requestConfig) {
   response = await fetchWithSession(fetchImpl, url, requestConfig);
   html = response.ok ? await response.text() : "";
   return { response, html };
+}
+
+async function fetchHtmlWithBrowser(url, requestConfig) {
+  if (typeof requestConfig.browserHtmlImpl === "function") {
+    const html = await requestConfig.browserHtmlImpl(url, requestConfig);
+    return {
+      response: { ok: true, status: 200 },
+      html,
+      browser: true
+    };
+  }
+
+  const candidates = [
+    process.env.CHROMIUM_PATH,
+    "chromium-browser",
+    "chromium",
+    "google-chrome"
+  ].filter(Boolean);
+
+  const args = [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--disable-dev-shm-usage",
+    "--disable-blink-features=AutomationControlled",
+    "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "--virtual-time-budget=5000",
+    "--dump-dom",
+    url
+  ];
+
+  const errors = [];
+  for (const command of candidates) {
+    try {
+      const { stdout } = await execFileAsync(command, args, {
+        timeout: requestConfig.browserTimeoutMs,
+        maxBuffer: 5 * 1024 * 1024
+      });
+      if (!stdout.trim()) {
+        errors.push(`${command}: empty output`);
+        continue;
+      }
+      return {
+        response: { ok: true, status: 200 },
+        html: stdout,
+        browser: true
+      };
+    } catch (error) {
+      const detail = error?.stderr || error?.message || error?.code || "unknown error";
+      errors.push(`${command}: ${String(detail).trim().slice(0, 240)}`);
+      if (error?.code === "ENOENT") {
+        continue;
+      }
+    }
+  }
+
+  return {
+    error: `Chromium browser rendering failed for ${url}: ${errors.join("; ") || "no chromium executable found"}`
+  };
 }
 
 async function ensureAdVerification(fetchImpl, pageUrl, requestConfig) {
@@ -557,6 +631,15 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
         message: `获取详情页：${row.ip}`
       });
       detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig);
+      report({
+        phase: "source:detail-loaded",
+        ip: row.ip,
+        typeName: row.typeName,
+        attempt: attempt + 1,
+        detailUrl,
+        browser: detail.browser === true,
+        message: `详情页已读取：${row.ip}${detail.browser ? "（Chromium 渲染）" : ""}`
+      });
     } catch (error) {
       throwIfAborted(requestConfig.abortSignal);
       report({
@@ -596,6 +679,15 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
         message: `分析频道列表：${row.ip}`
       });
       channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig);
+      report({
+        phase: "source:channel-list-loaded",
+        ip: row.ip,
+        typeName: row.typeName,
+        attempt: attempt + 1,
+        channelListUrl,
+        browser: channelList.browser === true,
+        message: `频道列表已读取：${row.ip}${channelList.browser ? "（Chromium 渲染）" : ""}`
+      });
     } catch (error) {
       throwIfAborted(requestConfig.abortSignal);
       report({
@@ -765,7 +857,7 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
   const warnings = [];
   let useFallbackBase = false;
   const cookieJar = createCookieJar();
-  const requestConfig = { ...config, cookieJar, abortSignal: options.signal };
+  const requestConfig = { ...config, cookieJar, abortSignal: options.signal, browserHtmlImpl: options.browserHtmlImpl };
 
   const endPage = config.startPage + config.maxPages - 1;
   report({
@@ -1087,7 +1179,7 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
   const sleepImpl = options.sleepImpl || sleep;
   const now = options.now || new Date();
   const cookieJar = createCookieJar();
-  const requestConfig = { ...config, cookieJar };
+  const requestConfig = { ...config, cookieJar, browserHtmlImpl: options.browserHtmlImpl };
   const pages = [];
   const rows = [];
 

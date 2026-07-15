@@ -999,6 +999,8 @@ export function renderCollectorPage(options = {}) {
         detailRetryDelayMs: 10000,
         detailRetries: 2,
         m3uCheckRetries: 2,
+        browserFetch: true,
+        browserTimeoutMs: 25000,
         m3uCheckRetryDelayMs: 10000,
         requestTimeoutMs: 15000
       };
