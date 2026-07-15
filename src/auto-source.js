@@ -218,8 +218,11 @@ function parseDetailChannelListUrl(html = "", pageUrl = "https://iptv.cqshushu.c
   for (const match of source.matchAll(anchorPattern)) {
     const href = readAttribute(match[1], "href");
     const label = `${match[1]} ${match[2]}`;
-    const isPlayButton = /\bbtn-play\b/.test(match[1]) || /\bdownload-btn\s+m3u\b/.test(match[1]);
-    if (isPlayButton || isChannelListLink(label)) {
+    const labelText = stripTags(decodeHtmlEntities(label));
+    const hasChannelListText = labelText.includes("\u67e5\u770b\u9891\u9053\u5217\u8868") ||
+      labelText.includes("\u9891\u9053\u5217\u8868") ||
+      isChannelListLink(label);
+    if (hasChannelListText) {
       const url = normalizeChannelListUrl(pageUrl, href);
       if (url) {
         return url;
@@ -581,7 +584,6 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
       });
       continue;
     }
-
     let channelList;
     try {
       throwIfAborted(requestConfig.abortSignal);

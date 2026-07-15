@@ -397,7 +397,7 @@ describe("auto source discovery", () => {
     expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=real-channel-list-token&t=multicast&channels=1&format=m3u");
   });
 
-  test("resolves the m3u interface from structural buttons when labels vary", async () => {
+  test("ignores unrelated detail play buttons and uses the explicit channel list link", async () => {
     const fetchMock = async (url) => {
       if (url.endsWith("/ad_verify.php")) {
         return {
@@ -413,8 +413,8 @@ describe("auto source discovery", () => {
           status: 200,
           headers: { get: () => null },
           text: async () => `
-            <a href="?s=wrong-token&t=multicast">other token</a>
-            <a href="?s=button-channel-token&t=multicast" class="btn btn-play">open</a>
+            <a href="?s=random-empty-token&t=multicast" class="btn btn-play">play</a>
+            <a href="?s=button-channel-token&t=multicast">查看频道列表</a>
           `
         };
       }
@@ -466,7 +466,7 @@ describe("auto source discovery", () => {
           ok: true,
           status: 200,
           headers: { get: () => null },
-          text: async () => '<a href="?s=correct-channel-token&t=multicast" class="btn btn-play">open</a>'
+          text: async () => '<a href="?s=correct-channel-token&t=multicast">查看频道列表</a>'
         };
       }
       if (url.includes("?s=correct-channel-token&t=multicast")) {
@@ -563,7 +563,7 @@ describe("auto source discovery", () => {
           ok: true,
           status: 200,
           headers: { get: () => null },
-          text: async () => '<a href="?s=empty-token&t=multicast" class="btn btn-play">open</a>'
+          text: async () => '<a href="?s=empty-token&t=multicast">查看频道列表</a>'
         };
       }
       if (url.includes("?s=empty-token&t=multicast") && !url.includes("format=m3u")) {
@@ -725,7 +725,7 @@ describe("auto source discovery", () => {
           ok: true,
           status: 200,
           headers: { get: () => null },
-          text: async () => '<a href="?s=after-rate-limit&t=multicast" class="btn btn-play">channel list</a>'
+          text: async () => '<a href="?s=after-rate-limit&t=multicast">查看频道列表</a>'
         };
       }
       if (url.includes("?s=after-rate-limit&t=multicast")) {
@@ -852,7 +852,7 @@ describe("auto source discovery", () => {
           ok: true,
           status: 200,
           headers: { get: () => null },
-          text: async () => '<a href="?s=empty-real-token&t=multicast" class="btn btn-play">open</a>'
+          text: async () => '<a href="?s=empty-real-token&t=multicast">查看频道列表</a>'
         };
       }
       if (url.includes("?s=empty-real-token&t=multicast") && !url.includes("format=m3u")) {
@@ -929,7 +929,7 @@ describe("auto source discovery", () => {
           ok: true,
           status: 200,
           headers: { get: () => null },
-          text: async () => `<a href="?s=${token}&t=multicast" class="btn btn-play">open</a>`
+          text: async () => `<a href="?s=${token}&t=multicast">查看频道列表</a>`
         };
       }
       if (url.includes("?s=empty-token&t=multicast") && !url.includes("format=m3u")) {
@@ -1032,7 +1032,7 @@ describe("auto source discovery", () => {
           ok: true,
           status: 200,
           headers: { get: () => null },
-          text: async () => '<a href="?s=real-token&t=multicast" class="btn btn-play">open</a>'
+          text: async () => '<a href="?s=real-token&t=multicast">查看频道列表</a>'
         };
       }
       if (url.includes("?s=real-token&t=multicast") && !url.includes("format=m3u")) {
