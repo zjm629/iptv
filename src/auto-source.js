@@ -530,9 +530,9 @@ async function fetchWithSession(fetchImpl, url, requestConfig) {
   return response;
 }
 
-async function fetchHtmlWithSession(fetchImpl, url, requestConfig) {
+async function fetchHtmlWithSession(fetchImpl, url, requestConfig, browserReferrer = "") {
   if (requestConfig.browserFetch) {
-    const browserResult = await fetchHtmlWithBrowser(url, requestConfig);
+    const browserResult = await fetchHtmlWithBrowser(url, requestConfig, browserReferrer);
     if (browserResult?.html !== undefined) {
       return browserResult;
     }
@@ -561,9 +561,9 @@ async function fetchHtmlWithSession(fetchImpl, url, requestConfig) {
   return { response, html };
 }
 
-async function fetchHtmlWithBrowser(url, requestConfig) {
+async function fetchHtmlWithBrowser(url, requestConfig, browserReferrer = "") {
   if (typeof requestConfig.browserHtmlImpl === "function") {
-    const html = await requestConfig.browserHtmlImpl(url, requestConfig);
+    const html = await requestConfig.browserHtmlImpl(url, { ...requestConfig, browserReferrer });
     return {
       response: { ok: true, status: 200 },
       html,
@@ -581,14 +581,15 @@ async function fetchHtmlWithBrowser(url, requestConfig) {
   const errors = [];
   for (const command of candidates) {
     try {
-      const html = await renderHtmlWithChromium(command, url, requestConfig);
-      if (!html.trim()) {
+      const rendered = await renderHtmlWithChromium(command, url, requestConfig, browserReferrer);
+      if (!rendered.html.trim()) {
         errors.push(`${command}: empty rendered html`);
         continue;
       }
       return {
         response: { ok: true, status: 200 },
-        html,
+        html: rendered.html,
+        finalUrl: rendered.finalUrl,
         browser: true
       };
     } catch (error) {
@@ -717,7 +718,7 @@ const STEALTH_SCRIPT = `
 })();
 `;
 
-async function renderHtmlWithChromium(command, url, requestConfig) {
+async function renderHtmlWithChromium(command, url, requestConfig, browserReferrer = "") {
   const args = [
     "--headless=new",
     "--no-sandbox",
@@ -740,10 +741,15 @@ async function renderHtmlWithChromium(command, url, requestConfig) {
     await client.send("Page.enable", {}, sessionId);
     await client.send("Runtime.enable", {}, sessionId);
     await client.send("Page.addScriptToEvaluateOnNewDocument", { source: STEALTH_SCRIPT }, sessionId);
-    await client.send("Page.navigate", { url }, sessionId);
+    const navigateParams = { url };
+    if (browserReferrer) {
+      navigateParams.referrer = browserReferrer;
+    }
+    await client.send("Page.navigate", navigateParams, sessionId);
 
     const deadline = Date.now() + requestConfig.browserTimeoutMs;
     let lastHtml = "";
+    let lastFinalUrl = url;
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 600));
       const evaluated = await client.send("Runtime.evaluate", {
@@ -752,13 +758,14 @@ async function renderHtmlWithChromium(command, url, requestConfig) {
       }, sessionId);
       const value = evaluated?.result?.value || {};
       lastHtml = value.html || lastHtml;
+      lastFinalUrl = value.href || lastFinalUrl;
       const text = value.text || "";
       const stillChecking = text.includes("安全验证中") || text.includes("正在确认您的浏览器安全环境");
       if (lastHtml && value.readyState === "complete" && !stillChecking) {
-        return lastHtml;
+        return { html: lastHtml, finalUrl: lastFinalUrl };
       }
     }
-    return lastHtml;
+    return { html: lastHtml, finalUrl: lastFinalUrl };
   } finally {
     client?.close();
     if (!chrome.killed) {
@@ -819,13 +826,14 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
         detailUrl,
         message: `获取详情页：${row.ip}`
       });
-      detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig);
+      detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig, row.discoveryPageUrl || requestConfig.pageUrl);
       report({
         phase: "source:detail-loaded",
         ip: row.ip,
         typeName: row.typeName,
         attempt: attempt + 1,
         detailUrl,
+        finalUrl: detail.finalUrl,
         browser: detail.browser === true,
         message: `详情页已读取：${row.ip}${detail.browser ? "（Chromium 渲染）" : ""}`
       });
@@ -853,6 +861,7 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
         typeName: row.typeName,
         attempt: attempt + 1,
         detailUrl,
+        finalUrl: detail.finalUrl,
         status: detail.response.status,
         pageTitle: detailSummary.title,
         pageText: detailSummary.text,
@@ -877,13 +886,14 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
         channelListUrl,
         message: `分析频道列表：${row.ip}`
       });
-      channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig);
+      channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig, detailUrl);
       report({
         phase: "source:channel-list-loaded",
         ip: row.ip,
         typeName: row.typeName,
         attempt: attempt + 1,
         channelListUrl,
+        finalUrl: channelList.finalUrl,
         browser: channelList.browser === true,
         message: `频道列表已读取：${row.ip}${channelList.browser ? "（Chromium 渲染）" : ""}`
       });
@@ -1149,7 +1159,7 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
 
     const html = await response.text();
     throwIfAborted(options.signal);
-    const pageRows = parseTableRows(html);
+    const pageRows = parseTableRows(html).map((row) => ({ ...row, discoveryPageUrl: effectiveUrl }));
     pages.push({ page, url: effectiveUrl, rows: pageRows.length });
     rows.push(...pageRows);
     report({
@@ -1436,7 +1446,7 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
       break;
     }
     const html = await response.text();
-    const pageRows = parseTableRows(html);
+    const pageRows = parseTableRows(html).map((row) => ({ ...row, discoveryPageUrl: url }));
     pages.push({ page, url, rows: pageRows.length });
     rows.push(...pageRows);
     if (pageRows.some((row) => row.ip === targetIp) || !html.includes("下一页")) {
@@ -1457,7 +1467,7 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
   const detailUrl = buildDetailUrl(config.pageUrl, row);
   let detail;
   try {
-    detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig);
+    detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig, row.discoveryPageUrl || config.pageUrl);
   } catch (error) {
     result.detail = {
       url: detailUrl,
@@ -1485,7 +1495,7 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
 
   let channelList;
   try {
-    channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig);
+    channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig, detailUrl);
   } catch (error) {
     result.channelList = {
       url: channelListUrl,

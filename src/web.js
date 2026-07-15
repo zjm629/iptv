@@ -1023,6 +1023,7 @@ export function renderCollectorPage(options = {}) {
         "<span>" + escapeHtml(event.time ? new Date(event.time).toLocaleTimeString() : "") + "</span>" +
         "<span>" + escapeHtml(event.message || event.phase || "") +
         (event.error ? "；" + escapeHtml(event.error) : "") +
+        (event.finalUrl ? "；实际 " + escapeHtml(event.finalUrl) : "") +
         (event.pageTitle ? "；标题 " + escapeHtml(event.pageTitle) : "") +
         (event.hasSecurityChallenge ? "；安全验证页" : "") +
         (event.hasAccessDenied ? "；访问被拒绝" : "") +

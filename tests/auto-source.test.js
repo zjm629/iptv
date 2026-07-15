@@ -453,6 +453,7 @@ describe("auto source discovery", () => {
 
   test("uses browser-rendered detail pages when source protection returns decoy links to fetch", async () => {
     const browserUrls = [];
+    const browserReferrers = [];
     const tableHtml = `
       <table><tbody>
       <tr>
@@ -510,8 +511,9 @@ describe("auto source discovery", () => {
       validateM3uUrls: false
     }, {
       fetchImpl: fetchMock,
-      browserHtmlImpl: async (url) => {
+      browserHtmlImpl: async (url, context) => {
         browserUrls.push(url);
+        browserReferrers.push(context.browserReferrer || "");
         if (url.includes("?p=top-sichuan&t=multicast")) {
           return '<a href="?s=real-browser-token&t=multicast">查看频道列表</a>';
         }
@@ -525,6 +527,10 @@ describe("auto source discovery", () => {
     expect(browserUrls).toEqual([
       "https://iptv.cqshushu.com/index.php?p=top-sichuan&t=multicast",
       "https://iptv.cqshushu.com/index.php?s=real-browser-token&t=multicast"
+    ]);
+    expect(browserReferrers).toEqual([
+      "https://iptv.cqshushu.com/index.php",
+      "https://iptv.cqshushu.com/index.php?p=top-sichuan&t=multicast"
     ]);
     expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=real-browser-token&t=multicast&channels=1&format=m3u");
   });
