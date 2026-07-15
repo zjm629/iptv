@@ -932,6 +932,57 @@ describe("server routes", () => {
     );
   });
 
+  test("cancels a running auto source discovery job", async () => {
+    const store = createFakeStore();
+    let capturedSignal;
+    store.discoverAutoSources = jest.fn(async (_config, options = {}) => {
+      capturedSignal = options.signal;
+      options.onProgress?.({ phase: "source:start", ip: "1.1.1.1", message: "start" });
+      return new Promise((_resolve, reject) => {
+        options.signal?.addEventListener("abort", () => {
+          reject(Object.assign(new Error("Collector job cancelled"), { name: "AbortError" }));
+        });
+      });
+    });
+
+    const app = createApp(store);
+    const startResponse = await request(app)
+      .post("/api/auto-sources/discover-jobs")
+      .send({ enabled: true });
+
+    for (let attempt = 0; attempt < 10 && !capturedSignal; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const cancelResponse = await request(app)
+      .post(`/api/auto-sources/discover-jobs/${startResponse.body.id}/cancel`);
+
+    expect(cancelResponse.status).toBe(200);
+    expect(cancelResponse.body.status).toBe("cancelled");
+    expect(capturedSignal.aborted).toBe(true);
+
+    let jobResponse;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      jobResponse = await request(app).get(`/api/auto-sources/discover-jobs/${startResponse.body.id}`);
+      if (jobResponse.body.status === "cancelled") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    expect(jobResponse.body.status).toBe("cancelled");
+    expect(jobResponse.body.progress).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase: "discover:cancelled" })
+    ]));
+    expect(store.discoverAutoSources).toHaveBeenCalledWith(
+      { enabled: true },
+      expect.objectContaining({
+        onProgress: expect.any(Function),
+        signal: expect.any(AbortSignal)
+      })
+    );
+  });
+
   test("collects discovered auto sources into configured sources", async () => {
     const store = createFakeStore();
     const selectedSources = [
@@ -1006,6 +1057,8 @@ describe("server routes", () => {
     expect(response.text).toContain("requestTimeoutMs");
     expect(response.text).toContain("page.error");
     expect(response.text).toContain("parseJsonResponse");
+    expect(response.text).toContain("stop-preview");
+    expect(response.text).toContain("/cancel");
     expect(response.text).toContain("服务器返回空响应");
     expect(response.text).toContain("服务器返回的不是 JSON");
     expect(response.text).toContain("未解析到源列表");

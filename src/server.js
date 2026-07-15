@@ -209,6 +209,7 @@ export function createApp(store, options = {}) {
   const hlsIdleTimeoutMs = options.hlsIdleTimeoutMs ?? Number.parseInt(process.env.HLS_IDLE_TIMEOUT_MS || "30000", 10);
   const hlsSessions = new Map();
   const discoveryJobs = new Map();
+  const discoveryJobControllers = new Map();
   const discoveryJobTtlMs = options.discoveryJobTtlMs ?? 30 * 60 * 1000;
 
   function stopHlsSession(sessionId) {
@@ -426,6 +427,7 @@ export function createApp(store, options = {}) {
 
   app.post("/api/auto-sources/discover-jobs", (req, res) => {
     const id = crypto.randomUUID();
+    const controller = new AbortController();
     const job = {
       id,
       status: "running",
@@ -436,9 +438,11 @@ export function createApp(store, options = {}) {
       error: ""
     };
     discoveryJobs.set(id, job);
+    discoveryJobControllers.set(id, controller);
 
     Promise.resolve().then(async () => {
       const result = await store.discoverAutoSources(req.body || {}, {
+        signal: controller.signal,
         onProgress: (event) => {
           job.updatedAt = new Date().toISOString();
           job.progress.push(event);
@@ -447,10 +451,25 @@ export function createApp(store, options = {}) {
           }
         }
       });
-      job.status = "done";
+      job.status = controller.signal.aborted || job.status === "cancelled" ? "cancelled" : "done";
       job.updatedAt = new Date().toISOString();
-      job.result = result;
+      if (job.status === "done") {
+        job.result = result;
+      }
     }).catch((error) => {
+      if (controller.signal.aborted || error?.name === "AbortError") {
+        job.status = "cancelled";
+        job.updatedAt = new Date().toISOString();
+        job.error = "";
+        if (!job.progress.some((event) => event.phase === "discover:cancelled")) {
+          job.progress.push({
+            time: new Date().toISOString(),
+            phase: "discover:cancelled",
+            message: "采集已停止"
+          });
+        }
+        return;
+      }
       job.status = "error";
       job.updatedAt = new Date().toISOString();
       job.error = error.message || String(error);
@@ -461,10 +480,34 @@ export function createApp(store, options = {}) {
         message: `采集失败：${job.error}`
       });
     }).finally(() => {
+      discoveryJobControllers.delete(id);
       setTimeout(() => {
         discoveryJobs.delete(id);
       }, discoveryJobTtlMs).unref?.();
     });
+
+    res.json(job);
+  });
+
+  app.post("/api/auto-sources/discover-jobs/:jobId/cancel", (req, res) => {
+    const job = discoveryJobs.get(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: "Discovery job not found." });
+      return;
+    }
+
+    if (job.status === "running") {
+      const controller = discoveryJobControllers.get(req.params.jobId);
+      controller?.abort();
+      job.status = "cancelled";
+      job.updatedAt = new Date().toISOString();
+      job.error = "";
+      job.progress.push({
+        time: new Date().toISOString(),
+        phase: "discover:cancelled",
+        message: "采集已停止"
+      });
+    }
 
     res.json(job);
   });

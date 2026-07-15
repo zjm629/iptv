@@ -78,7 +78,7 @@ function normalizeAutoSourceConfig(value = {}) {
     detailRetryDelayMs: parseBoundedInteger(value.detailRetryDelayMs ?? "5000", 5000, 0, 30000),
     m3uCheckRetries: parseBoundedInteger(value.m3uCheckRetries ?? "2", 2, 0, 5),
     m3uCheckRetryDelayMs: parseBoundedInteger(value.m3uCheckRetryDelayMs ?? "5000", 5000, 0, 30000),
-    emptyM3uResolveRetries: parseBoundedInteger(value.emptyM3uResolveRetries ?? "2", 2, 0, 5),
+    emptyM3uResolveRetries: parseBoundedInteger(value.emptyM3uResolveRetries ?? "0", 0, 0, 5),
     emptyM3uResolveDelayMs: parseBoundedInteger(value.emptyM3uResolveDelayMs ?? "8000", 8000, 0, 60000),
     requestTimeoutMs: parseBoundedInteger(value.requestTimeoutMs ?? "15000", 15000, 1, 120000),
     browserProfile: value.browserProfile !== false,
@@ -315,16 +315,29 @@ async function describeBadResponse(response) {
 }
 
 async function fetchWithTimeout(fetchImpl, url, options, timeoutMs) {
-  if (!timeoutMs || typeof AbortController === "undefined") {
+  const externalSignal = options?.externalSignal;
+  throwIfAborted(externalSignal);
+  if (!timeoutMs && !externalSignal) {
     return fetchImpl(url, options);
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
+  const timer = timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  externalSignal?.addEventListener?.("abort", onAbort, { once: true });
   try {
-    return await fetchImpl(url, { ...options, signal: controller.signal });
+    const { externalSignal: _externalSignal, ...fetchOptions } = options || {};
+    return await fetchImpl(url, { ...fetchOptions, signal: controller.signal });
+  } catch (error) {
+    if (externalSignal?.aborted) {
+      throw createAbortError();
+    }
+    throw error;
   } finally {
-    clearTimeout(timer);
+    if (timer) {
+      clearTimeout(timer);
+    }
+    externalSignal?.removeEventListener?.("abort", onAbort);
   }
 }
 
@@ -360,7 +373,8 @@ async function fetchDiscoveryPage(fetchImpl, url, config) {
   const cookieHeader = config.cookieJar?.header();
   return fetchWithTimeout(fetchImpl, url, {
     redirect: "manual",
-    headers: buildBrowserHeaders(config, cookieHeader)
+    headers: buildBrowserHeaders(config, cookieHeader),
+    externalSignal: config.abortSignal
   }, config.requestTimeoutMs);
 }
 
@@ -404,8 +418,38 @@ function createCookieJar() {
   };
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function createAbortError() {
+  return Object.assign(new Error("Collector job cancelled"), { name: "AbortError" });
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+}
+
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener?.("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(createAbortError());
+    };
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+  });
+}
+
+async function sleepWithCancel(sleepImpl, ms, signal) {
+  throwIfAborted(signal);
+  await sleepImpl(ms, signal);
+  throwIfAborted(signal);
 }
 
 function isTransientDiscoveryStatus(status) {
@@ -474,6 +518,7 @@ function createProgressReporter(callback) {
 async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, report = () => {}) {
   const detailUrl = buildDetailUrl(requestConfig.pageUrl, row);
   for (let attempt = 0; attempt <= requestConfig.detailRetries; attempt += 1) {
+    throwIfAborted(requestConfig.abortSignal);
     if (attempt > 0 && requestConfig.detailRetryDelayMs > 0) {
       report({
         phase: "source:detail-wait",
@@ -483,7 +528,7 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
         delayMs: requestConfig.detailRetryDelayMs * attempt,
         message: `等待后重试详情页：${row.ip}`
       });
-      await sleepImpl(requestConfig.detailRetryDelayMs * attempt);
+      await sleepWithCancel(sleepImpl, requestConfig.detailRetryDelayMs * attempt, requestConfig.abortSignal);
     }
     let detail;
     try {
@@ -497,6 +542,7 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
       });
       detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig);
     } catch (error) {
+      throwIfAborted(requestConfig.abortSignal);
       report({
         phase: "source:detail-error",
         ip: row.ip,
@@ -524,6 +570,7 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
 
     let channelList;
     try {
+      throwIfAborted(requestConfig.abortSignal);
       report({
         phase: "source:channel-list",
         ip: row.ip,
@@ -534,6 +581,7 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
       });
       channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig);
     } catch (error) {
+      throwIfAborted(requestConfig.abortSignal);
       report({
         phase: "source:channel-list-error",
         ip: row.ip,
@@ -573,6 +621,7 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
 
 async function checkM3uUrl(fetchImpl, url, referer, requestConfig) {
   try {
+    throwIfAborted(requestConfig.abortSignal);
     const cookieHeader = requestConfig.cookieJar?.header();
     const response = await fetchWithTimeout(fetchImpl, url, {
       headers: {
@@ -580,7 +629,8 @@ async function checkM3uUrl(fetchImpl, url, referer, requestConfig) {
         "accept": "*/*",
         "referer": referer || requestConfig.pageUrl,
         ...(cookieHeader ? { cookie: cookieHeader } : {})
-      }
+      },
+      externalSignal: requestConfig.abortSignal
     }, requestConfig.requestTimeoutMs);
     if (!response.ok) {
       return { ok: false, status: response.status, channelLines: 0 };
@@ -594,6 +644,7 @@ async function checkM3uUrl(fetchImpl, url, referer, requestConfig) {
       head: text.slice(0, 120)
     };
   } catch (error) {
+    throwIfAborted(requestConfig.abortSignal);
     return { ok: false, error: formatFetchError(error, requestConfig), channelLines: 0 };
   }
 }
@@ -601,6 +652,7 @@ async function checkM3uUrl(fetchImpl, url, referer, requestConfig) {
 async function checkM3uUrlWithRetries(fetchImpl, url, referer, requestConfig, sleepImpl, row, report = () => {}) {
   let lastCheck = null;
   for (let attempt = 0; attempt <= requestConfig.m3uCheckRetries; attempt += 1) {
+    throwIfAborted(requestConfig.abortSignal);
     if (attempt > 0 && requestConfig.m3uCheckRetryDelayMs > 0) {
       report({
         phase: "source:m3u-wait",
@@ -611,7 +663,7 @@ async function checkM3uUrlWithRetries(fetchImpl, url, referer, requestConfig, sl
         m3uUrl: url,
         message: `M3U 为空，等待后重试：${row.ip}`
       });
-      await sleepImpl(requestConfig.m3uCheckRetryDelayMs * attempt);
+      await sleepWithCancel(sleepImpl, requestConfig.m3uCheckRetryDelayMs * attempt, requestConfig.abortSignal);
     }
     report({
       phase: "source:m3u-check",
@@ -634,7 +686,7 @@ async function checkM3uUrlWithRetries(fetchImpl, url, referer, requestConfig, sl
       error: lastCheck.error,
       message: `M3U 校验结果：${row.ip}，频道 ${lastCheck.channelLines || 0} 个`
     });
-    if (lastCheck.ok && lastCheck.channelLines > 0) {
+    if (lastCheck.ok) {
       return lastCheck;
     }
   }
@@ -678,6 +730,7 @@ function filterRows(rows, config, now = new Date()) {
 export async function discoverAutoSources(configValue = {}, options = {}) {
   const config = normalizeAutoSourceConfig(configValue);
   const report = createProgressReporter(options.onProgress);
+  throwIfAborted(options.signal);
   if (!config.enabled) {
     return { config, sources: [], rows: [], pages: [] };
   }
@@ -690,7 +743,7 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
   const warnings = [];
   let useFallbackBase = false;
   const cookieJar = createCookieJar();
-  const requestConfig = { ...config, cookieJar };
+  const requestConfig = { ...config, cookieJar, abortSignal: options.signal };
 
   const endPage = config.startPage + config.maxPages - 1;
   report({
@@ -700,6 +753,7 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
     message: `开始采集：${config.pageUrl}`
   });
   for (let page = config.startPage; page <= endPage; page += 1) {
+    throwIfAborted(options.signal);
     if (page > config.startPage && config.pageDelayMs > 0) {
       report({
         phase: "page:wait",
@@ -707,7 +761,7 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
         delayMs: config.pageDelayMs,
         message: `等待后采集第 ${page} 页`
       });
-      await sleepImpl(config.pageDelayMs);
+      await sleepWithCancel(sleepImpl, config.pageDelayMs, options.signal);
     }
     const url = buildPageUrl(useFallbackBase ? buildBaseIndexUrl(config.pageUrl) : config.pageUrl, page);
     if (!url) {
@@ -725,6 +779,7 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
       });
       response = await fetchWithSession(fetchImpl, url, requestConfig);
       for (let attempt = 0; isTransientDiscoveryStatus(response.status) && attempt < config.rateLimitRetries; attempt += 1) {
+        throwIfAborted(options.signal);
         if (config.rateLimitDelayMs > 0) {
           report({
             phase: "page:retry-wait",
@@ -735,11 +790,12 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
             delayMs: config.rateLimitDelayMs * (attempt + 1),
             message: `第 ${page} 页遇到 HTTP ${response.status}，等待后重试`
           });
-          await sleepImpl(config.rateLimitDelayMs * (attempt + 1));
+          await sleepWithCancel(sleepImpl, config.rateLimitDelayMs * (attempt + 1), options.signal);
         }
         response = await fetchWithSession(fetchImpl, url, requestConfig);
       }
     } catch (error) {
+      throwIfAborted(options.signal);
       pages.push({ page, url, rows: 0, error: formatFetchError(error, requestConfig) });
       warnings.push(`第 ${page} 页采集失败：${formatFetchError(error, requestConfig)}`);
       report({
@@ -775,6 +831,7 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
     }
 
     const html = await response.text();
+    throwIfAborted(options.signal);
     const pageRows = parseTableRows(html);
     pages.push({ page, url: effectiveUrl, rows: pageRows.length });
     rows.push(...pageRows);
@@ -812,6 +869,7 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
   let skippedEmptyM3uUrls = 0;
   let detailIndex = 0;
   for (const row of selectedRows) {
+    throwIfAborted(options.signal);
     let sourceUrl = buildM3uUrl(config.pageUrl, row);
     let channelListUrl = "";
     let resolvedFromDetail = false;
@@ -833,7 +891,7 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
           delayMs: config.detailDelayMs,
           message: `等待后采集下一条：${row.ip}`
         });
-        await sleepImpl(config.detailDelayMs);
+        await sleepWithCancel(sleepImpl, config.detailDelayMs, options.signal);
       }
       detailIndex += 1;
       const detailResult = await resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, report);
@@ -864,6 +922,7 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
     if (config.validateM3uUrls && resolvedFromDetail) {
       let m3uCheck = null;
       for (let resolveAttempt = 0; resolveAttempt <= requestConfig.emptyM3uResolveRetries; resolveAttempt += 1) {
+        throwIfAborted(options.signal);
         m3uCheck = await checkM3uUrlWithRetries(fetchImpl, sourceUrl, channelListUrl || config.pageUrl, requestConfig, sleepImpl, row, report);
         if (m3uCheck.ok && m3uCheck.channelLines > 0) {
           break;
@@ -881,7 +940,7 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
             m3uUrl: sourceUrl,
             message: `M3U 仍为空，重新进入详情页前等待：${row.ip}`
           });
-          await sleepImpl(requestConfig.emptyM3uResolveDelayMs * (resolveAttempt + 1));
+          await sleepWithCancel(sleepImpl, requestConfig.emptyM3uResolveDelayMs * (resolveAttempt + 1), options.signal);
         }
         const nextDetailResult = await resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, report);
         if (nextDetailResult.m3uUrl) {

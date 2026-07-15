@@ -820,7 +820,7 @@ describe("auto source discovery", () => {
     expect(result.warnings).toContain("已跳过 1 个无频道 M3U 地址。");
   });
 
-  test("re-resolves the detail page when the resolved m3u token is empty", async () => {
+  test("does not re-resolve successful empty m3u responses by default", async () => {
     const waits = [];
     let detailRequests = 0;
     const tableHtml = `
@@ -906,7 +906,6 @@ describe("auto source discovery", () => {
       detailRetries: 0,
       detailDelayMs: 0,
       m3uCheckRetries: 0,
-      emptyM3uResolveRetries: 1,
       emptyM3uResolveDelayMs: 1234
     }, {
       fetchImpl: fetchMock,
@@ -914,15 +913,40 @@ describe("auto source discovery", () => {
       now: new Date("2026-07-13T12:00:00+08:00")
     });
 
-    expect(detailRequests).toBe(2);
-    expect(waits).toContain(1234);
-    expect(result.sources).toEqual([
+    expect(detailRequests).toBe(1);
+    expect(waits).not.toContain(1234);
+    expect(result.sources).toEqual([]);
+    expect(result.skippedSources).toEqual([
       expect.objectContaining({
         ip: "171.193.240.67",
-        url: "http://iptv.cqshushu.com/index.php?s=good-token&t=multicast&channels=1&format=m3u"
+        reason: "m3u-empty",
+        m3uUrl: "http://iptv.cqshushu.com/index.php?s=empty-token&t=multicast&channels=1&format=m3u"
       })
     ]);
-    expect(result.skippedSources).toEqual([]);
+  });
+
+  test("stops discovery before requests when cancelled", async () => {
+    const controller = new AbortController();
+    let fetchCalls = 0;
+    const fetchMock = async () => {
+      fetchCalls += 1;
+      throw new Error("fetch should not run after cancellation");
+    };
+
+    controller.abort();
+
+    await expect(discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      maxPages: 1
+    }, {
+      fetchImpl: fetchMock,
+      signal: controller.signal,
+      now: new Date("2026-07-13T12:00:00+08:00")
+    })).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(fetchCalls).toBe(0);
   });
 
   test("retries a rate-limited discovery page before giving up", async () => {

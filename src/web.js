@@ -939,6 +939,7 @@ export function renderCollectorPage() {
       <input id="collector-keywords" value="电信" placeholder="关键词，多个用逗号分隔">
       <div class="actions">
         <button id="preview">预览采集</button>
+        <button id="stop-preview" class="danger" disabled>停止采集</button>
         <button id="select-all" class="secondary">全选</button>
         <button id="clear-selected" class="secondary">取消全选</button>
         <button id="collect" class="secondary">提交选中到首页采集源</button>
@@ -960,6 +961,7 @@ export function renderCollectorPage() {
   <script>
     const $ = (id) => document.getElementById(id);
     let latestSources = [];
+    let currentJobId = "";
 
     function escapeHtml(value) {
       return String(value || "").replace(/[&<>"']/g, (char) => ({
@@ -1096,8 +1098,14 @@ export function renderCollectorPage() {
       return result;
     }
 
+    function setCollectorRunning(running) {
+      $("preview").disabled = running;
+      $("stop-preview").disabled = !running || !currentJobId;
+    }
+
     $("preview").addEventListener("click", async () => {
-      $("preview").disabled = true;
+      currentJobId = "";
+      setCollectorRunning(true);
       $("message").textContent = "已启动慢速精采，正在逐条进入详情页提取真实 M3U。";
       $("warnings").innerHTML = "";
       $("results").innerHTML = "";
@@ -1107,6 +1115,8 @@ export function renderCollectorPage() {
       $("progress-text").textContent = "正在启动采集任务...";
       try {
         let job = await postJson("/api/auto-sources/discover-jobs", configFromForm());
+        currentJobId = job.id;
+        setCollectorRunning(true);
         renderProgress(job);
         while (job.status === "running") {
           await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -1116,13 +1126,35 @@ export function renderCollectorPage() {
         if (job.status === "error") {
           throw new Error(job.error || "采集失败");
         }
+        if (job.status === "cancelled") {
+          $("message").textContent = "采集已停止";
+          renderProgress(job);
+          return;
+        }
         renderDiscovery(job.result || {});
         renderProgress(job);
         $("message").textContent = "预览到 " + latestSources.length + " 个源";
       } catch (error) {
         $("message").textContent = error.message;
       } finally {
-        $("preview").disabled = false;
+        currentJobId = "";
+        setCollectorRunning(false);
+      }
+    });
+
+    $("stop-preview").addEventListener("click", async () => {
+      if (!currentJobId) {
+        return;
+      }
+      $("stop-preview").disabled = true;
+      $("message").textContent = "正在停止采集...";
+      try {
+        const job = await postJson("/api/auto-sources/discover-jobs/" + encodeURIComponent(currentJobId) + "/cancel", {});
+        renderProgress(job);
+        $("message").textContent = "采集已停止";
+      } catch (error) {
+        $("message").textContent = error.message;
+        $("stop-preview").disabled = false;
       }
     });
 
