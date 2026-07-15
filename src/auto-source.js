@@ -118,6 +118,44 @@ function buildChallengeUrl(pageUrl) {
   return url.toString();
 }
 
+function browserCookiesFromHeader(cookieHeader = "", targetUrl = "https://iptv.cqshushu.com/index.php") {
+  if (!cookieHeader) {
+    return [];
+  }
+  const url = new URL(targetUrl);
+  const baseUrl = `${url.protocol}//${url.hostname}/`;
+  return String(cookieHeader)
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const equalsIndex = part.indexOf("=");
+      if (equalsIndex <= 0) {
+        return null;
+      }
+      return {
+        name: part.slice(0, equalsIndex).trim(),
+        value: part.slice(equalsIndex + 1).trim(),
+        domain: url.hostname,
+        path: "/",
+        url: baseUrl
+      };
+    })
+    .filter((cookie) => cookie && cookie.name);
+}
+
+async function seedBrowserCookies(client, sessionId, targetUrl, requestConfig, commandTimeoutMs) {
+  const cookies = browserCookiesFromHeader(requestConfig.cookieJar?.header?.() || "", targetUrl);
+  if (cookies.length === 0) {
+    return 0;
+  }
+  await client.send("Network.enable", {}, sessionId, commandTimeoutMs);
+  for (const cookie of cookies) {
+    await client.send("Network.setCookie", cookie, sessionId, commandTimeoutMs);
+  }
+  return cookies.length;
+}
+
 function buildM3uUrl(pageUrl, row) {
   const url = new URL(pageUrl);
   url.search = "";
@@ -842,6 +880,7 @@ async function renderHtmlWithChromium(command, url, requestConfig, browserReferr
     await client.send("Page.enable", {}, sessionId, commandTimeoutMs);
     await client.send("Runtime.enable", {}, sessionId, commandTimeoutMs);
     await client.send("Page.addScriptToEvaluateOnNewDocument", { source: STEALTH_SCRIPT }, sessionId, commandTimeoutMs);
+    await seedBrowserCookies(client, sessionId, url, requestConfig, commandTimeoutMs);
     const navigateParams = { url };
     if (browserReferrer) {
       navigateParams.referrer = browserReferrer;
@@ -899,7 +938,23 @@ async function renderHtmlWithChromiumClick(command, startUrl, row, requestConfig
     await client.send("Page.enable", {}, sessionId, commandTimeoutMs);
     await client.send("Runtime.enable", {}, sessionId, commandTimeoutMs);
     await client.send("Page.addScriptToEvaluateOnNewDocument", { source: STEALTH_SCRIPT }, sessionId, commandTimeoutMs);
-    await client.send("Page.navigate", { url: startUrl }, sessionId, commandTimeoutMs);
+    const seededCookies = await seedBrowserCookies(client, sessionId, startUrl, requestConfig, commandTimeoutMs);
+    if (seededCookies > 0) {
+      report({
+        phase: "source:detail-click-cookies",
+        ip: row.ip,
+        typeName: row.typeName,
+        startUrl,
+        cookies: seededCookies,
+        message: `已同步浏览器会话 Cookie：${row.ip}`
+      });
+    }
+    const navigateParams = { url: startUrl };
+    const baseReferrer = buildBaseIndexUrl(startUrl);
+    if (baseReferrer !== startUrl) {
+      navigateParams.referrer = baseReferrer;
+    }
+    await client.send("Page.navigate", navigateParams, sessionId, commandTimeoutMs);
     await waitForStablePage(client, sessionId, requestConfig, startUrl);
     report({
       phase: "source:detail-click-list-loaded",
@@ -1779,4 +1834,4 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
   return result;
 }
 
-export { filterRows, normalizeAutoSourceConfig, parseTableRows, todayInShanghai };
+export { browserCookiesFromHeader, filterRows, normalizeAutoSourceConfig, parseTableRows, todayInShanghai };

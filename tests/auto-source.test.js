@@ -1,4 +1,4 @@
-import { debugAutoSourceByIp, discoverAutoSources, filterRows, normalizeAutoSourceConfig, parseTableRows } from "../src/auto-source.js";
+import { browserCookiesFromHeader, debugAutoSourceByIp, discoverAutoSources, filterRows, normalizeAutoSourceConfig, parseTableRows } from "../src/auto-source.js";
 
 const SAMPLE_HTML = `
 <table><tbody>
@@ -35,6 +35,35 @@ const SAMPLE_HTML = `
 </tbody></table>`;
 
 describe("auto source discovery", () => {
+  test("converts collected session cookies for Chromium navigation", () => {
+    expect(browserCookiesFromHeader(
+      "PHPSESSID=abc123; ad_ok=1; paer_sec_token=xyz",
+      "https://iptv.cqshushu.com/index.php?q=%E5%9B%9B%E5%B7%9D%E7%94%B5%E4%BF%A1"
+    )).toEqual([
+      {
+        name: "PHPSESSID",
+        value: "abc123",
+        domain: "iptv.cqshushu.com",
+        path: "/",
+        url: "https://iptv.cqshushu.com/"
+      },
+      {
+        name: "ad_ok",
+        value: "1",
+        domain: "iptv.cqshushu.com",
+        path: "/",
+        url: "https://iptv.cqshushu.com/"
+      },
+      {
+        name: "paer_sec_token",
+        value: "xyz",
+        domain: "iptv.cqshushu.com",
+        path: "/",
+        url: "https://iptv.cqshushu.com/"
+      }
+    ]);
+  });
+
   test("normalizes disabled auto collection by default", () => {
     expect(normalizeAutoSourceConfig({})).toEqual(expect.objectContaining({
       enabled: false,
