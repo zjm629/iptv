@@ -714,7 +714,7 @@ async function fetchDetailHtmlByClick(row, detailUrl, requestConfig, report = ()
   const errors = [];
   for (const command of candidates) {
     try {
-      const rendered = await renderHtmlWithChromiumClick(command, startUrl, row, requestConfig, report);
+      const rendered = await renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, requestConfig, report);
       if (!rendered.html.trim()) {
         errors.push(`${command}: empty clicked html`);
         continue;
@@ -935,7 +935,7 @@ async function renderHtmlWithChromium(command, url, requestConfig, browserReferr
   }
 }
 
-async function renderHtmlWithChromiumClick(command, startUrl, row, requestConfig, report = () => {}) {
+async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, requestConfig, report = () => {}) {
   const args = [
     "--headless=new",
     "--no-sandbox",
@@ -1031,7 +1031,24 @@ async function renderHtmlWithChromiumClick(command, startUrl, row, requestConfig
       clickedOnclick: clicked.onclick,
       message: `已点击列表源：${row.ip}`
     });
-    return waitForStablePage(client, sessionId, requestConfig, startUrl, { requireUrlChange: true });
+    try {
+      return await waitForStablePage(client, sessionId, requestConfig, startUrl, { requireUrlChange: true });
+    } catch (error) {
+      if (!String(error?.message || error).includes("Clicked source link but URL did not change from list page")) {
+        throw error;
+      }
+      report({
+        phase: "source:detail-click-fallback",
+        ip: row.ip,
+        typeName: row.typeName,
+        startUrl,
+        detailUrl,
+        error: error.message,
+        message: `点击未跳转，改用同会话详情页：${row.ip}`
+      });
+      await client.send("Page.navigate", { url: detailUrl, referrer: startUrl }, sessionId, commandTimeoutMs);
+      return waitForStablePage(client, sessionId, requestConfig, detailUrl);
+    }
   } finally {
     client?.close();
     if (!chrome.killed) {
