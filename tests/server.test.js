@@ -960,6 +960,9 @@ describe("server routes", () => {
     expect(response.text).toContain("更新时间");
     expect(response.text).toContain("requestTimeoutMs");
     expect(response.text).toContain("page.error");
+    expect(response.text).toContain("parseJsonResponse");
+    expect(response.text).toContain("服务器返回空响应");
+    expect(response.text).toContain("服务器返回的不是 JSON");
     expect(response.text).toContain("未解析到源列表");
   });
 

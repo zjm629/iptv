@@ -971,13 +971,25 @@ export function renderCollectorPage() {
       });
     }
 
+    async function parseJsonResponse(response) {
+      const text = await response.text();
+      if (!text.trim()) {
+        throw new Error("服务器返回空响应");
+      }
+      try {
+        return JSON.parse(text);
+      } catch (_error) {
+        throw new Error("服务器返回的不是 JSON：" + text.slice(0, 120));
+      }
+    }
+
     async function postJson(url, payload) {
       const response = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload)
       });
-      const result = await response.json();
+      const result = await parseJsonResponse(response);
       if (!response.ok) {
         throw new Error(result.error || "操作失败");
       }
