@@ -600,7 +600,8 @@ describe("auto source discovery", () => {
       todayOnly: false,
       onlyStatus: "",
       detailRetries: 0,
-      m3uCheckRetries: 0
+      m3uCheckRetries: 0,
+      emptyM3uResolveRetries: 0
     }, {
       fetchImpl: fetchMock,
       onProgress: (event) => events.push(event),
@@ -808,7 +809,8 @@ describe("auto source discovery", () => {
       todayOnly: false,
       onlyStatus: "OK",
       detailRetries: 0,
-      m3uCheckRetries: 0
+      m3uCheckRetries: 0,
+      emptyM3uResolveRetries: 0
     }, {
       fetchImpl: fetchMock,
       now: new Date("2026-07-13T12:00:00+08:00")
@@ -816,6 +818,111 @@ describe("auto source discovery", () => {
 
     expect(result.sources).toEqual([]);
     expect(result.warnings).toContain("已跳过 1 个无频道 M3U 地址。");
+  });
+
+  test("re-resolves the detail page when the resolved m3u token is empty", async () => {
+    const waits = [];
+    let detailRequests = 0;
+    const tableHtml = `
+      <table><tbody>
+      <tr>
+        <td><a onclick="gotoIP('listing-token','multicast')">171.193.240.67</a></td>
+        <td>376</td><td>Sichuan Telecom</td>
+        <td>2026-07-13 06:30</td><td>2026-07-13 17:00:00</td>
+        <td><span>OK</span></td>
+      </tr>
+      </tbody></table>
+    `;
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("?p=listing-token&t=multicast")) {
+        detailRequests += 1;
+        const token = detailRequests === 1 ? "empty-token" : "good-token";
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => `<a href="?s=${token}&t=multicast" class="btn btn-play">open</a>`
+        };
+      }
+      if (url.includes("?s=empty-token&t=multicast") && !url.includes("format=m3u")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => `
+            <a href="#" onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=empty-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;" class="btn btn-play" title="copy M3U interface">M3U interface</a>
+          `
+        };
+      }
+      if (url.includes("?s=good-token&t=multicast") && !url.includes("format=m3u")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => `
+            <a href="#" onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=good-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;" class="btn btn-play" title="copy M3U interface">M3U interface</a>
+          `
+        };
+      }
+      if (url.includes("s=empty-token") && url.includes("format=m3u")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "#EXTM3U x-tvg-url=\"https://fy.188766.xyz/e.xml\" tvg-shift=\"0\"\n"
+        };
+      }
+      if (url.includes("s=good-token") && url.includes("format=m3u")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "#EXTM3U\n#EXTINF:-1,CCTV1\nhttp://example.com/live.ts\n"
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => tableHtml
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      maxPages: 1,
+      todayOnly: false,
+      onlyStatus: "OK",
+      detailRetries: 0,
+      detailDelayMs: 0,
+      m3uCheckRetries: 0,
+      emptyM3uResolveRetries: 1,
+      emptyM3uResolveDelayMs: 1234
+    }, {
+      fetchImpl: fetchMock,
+      sleepImpl: async (ms) => waits.push(ms),
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(detailRequests).toBe(2);
+    expect(waits).toContain(1234);
+    expect(result.sources).toEqual([
+      expect.objectContaining({
+        ip: "171.193.240.67",
+        url: "http://iptv.cqshushu.com/index.php?s=good-token&t=multicast&channels=1&format=m3u"
+      })
+    ]);
+    expect(result.skippedSources).toEqual([]);
   });
 
   test("retries a rate-limited discovery page before giving up", async () => {

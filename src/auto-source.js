@@ -78,6 +78,8 @@ function normalizeAutoSourceConfig(value = {}) {
     detailRetryDelayMs: parseBoundedInteger(value.detailRetryDelayMs ?? "5000", 5000, 0, 30000),
     m3uCheckRetries: parseBoundedInteger(value.m3uCheckRetries ?? "2", 2, 0, 5),
     m3uCheckRetryDelayMs: parseBoundedInteger(value.m3uCheckRetryDelayMs ?? "5000", 5000, 0, 30000),
+    emptyM3uResolveRetries: parseBoundedInteger(value.emptyM3uResolveRetries ?? "2", 2, 0, 5),
+    emptyM3uResolveDelayMs: parseBoundedInteger(value.emptyM3uResolveDelayMs ?? "8000", 8000, 0, 60000),
     requestTimeoutMs: parseBoundedInteger(value.requestTimeoutMs ?? "15000", 15000, 1, 120000),
     browserProfile: value.browserProfile !== false,
     resolveDetailUrls: value.resolveDetailUrls !== false,
@@ -860,7 +862,47 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
       }
     }
     if (config.validateM3uUrls && resolvedFromDetail) {
-      const m3uCheck = await checkM3uUrlWithRetries(fetchImpl, sourceUrl, channelListUrl || config.pageUrl, requestConfig, sleepImpl, row, report);
+      let m3uCheck = null;
+      for (let resolveAttempt = 0; resolveAttempt <= requestConfig.emptyM3uResolveRetries; resolveAttempt += 1) {
+        m3uCheck = await checkM3uUrlWithRetries(fetchImpl, sourceUrl, channelListUrl || config.pageUrl, requestConfig, sleepImpl, row, report);
+        if (m3uCheck.ok && m3uCheck.channelLines > 0) {
+          break;
+        }
+        if (resolveAttempt >= requestConfig.emptyM3uResolveRetries) {
+          break;
+        }
+        if (requestConfig.emptyM3uResolveDelayMs > 0) {
+          report({
+            phase: "source:m3u-reresolve-wait",
+            ip: row.ip,
+            typeName: row.typeName,
+            attempt: resolveAttempt + 2,
+            delayMs: requestConfig.emptyM3uResolveDelayMs * (resolveAttempt + 1),
+            m3uUrl: sourceUrl,
+            message: `M3U 仍为空，重新进入详情页前等待：${row.ip}`
+          });
+          await sleepImpl(requestConfig.emptyM3uResolveDelayMs * (resolveAttempt + 1));
+        }
+        const nextDetailResult = await resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, report);
+        if (nextDetailResult.m3uUrl) {
+          const previousUrl = sourceUrl;
+          sourceUrl = nextDetailResult.m3uUrl;
+          channelListUrl = nextDetailResult.channelListUrl;
+          report({
+            phase: "source:m3u-reresolved",
+            ip: row.ip,
+            typeName: row.typeName,
+            attempt: resolveAttempt + 2,
+            previousM3uUrl: previousUrl,
+            m3uUrl: sourceUrl,
+            channelListUrl,
+            changed: previousUrl !== sourceUrl,
+            message: previousUrl === sourceUrl
+              ? `重新解析详情页，M3U 未变化：${row.ip}`
+              : `重新解析详情页，换到新 M3U：${row.ip}`
+          });
+        }
+      }
       if (!m3uCheck.ok || m3uCheck.channelLines <= 0) {
         skippedEmptyM3uUrls += 1;
         const skipped = {
