@@ -1,7 +1,7 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 function todayInShanghai(now = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -462,6 +462,17 @@ async function sleepWithCancel(sleepImpl, ms, signal) {
   throwIfAborted(signal);
 }
 
+async function createBrowserDataDir() {
+  return fs.mkdtemp(path.join(os.tmpdir(), "iptv-collector-browser-"));
+}
+
+async function removeBrowserDataDir(browserDataDir = "") {
+  if (!browserDataDir || !browserDataDir.startsWith(os.tmpdir())) {
+    return;
+  }
+  await fs.rm(browserDataDir, { recursive: true, force: true });
+}
+
 function isTransientDiscoveryStatus(status) {
   return [429, 502, 503, 504].includes(status);
 }
@@ -537,32 +548,17 @@ async function fetchHtmlWithBrowser(url, requestConfig) {
     "google-chrome"
   ].filter(Boolean);
 
-  const args = [
-    "--headless=new",
-    "--no-sandbox",
-    "--disable-gpu",
-    "--disable-dev-shm-usage",
-    "--disable-blink-features=AutomationControlled",
-    "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "--virtual-time-budget=5000",
-    "--dump-dom",
-    url
-  ];
-
   const errors = [];
   for (const command of candidates) {
     try {
-      const { stdout } = await execFileAsync(command, args, {
-        timeout: requestConfig.browserTimeoutMs,
-        maxBuffer: 5 * 1024 * 1024
-      });
-      if (!stdout.trim()) {
-        errors.push(`${command}: empty output`);
+      const html = await renderHtmlWithChromium(command, url, requestConfig);
+      if (!html.trim()) {
+        errors.push(`${command}: empty rendered html`);
         continue;
       }
       return {
         response: { ok: true, status: 200 },
-        html: stdout,
+        html,
         browser: true
       };
     } catch (error) {
@@ -577,6 +573,168 @@ async function fetchHtmlWithBrowser(url, requestConfig) {
   return {
     error: `Chromium browser rendering failed for ${url}: ${errors.join("; ") || "no chromium executable found"}`
   };
+}
+
+function waitForProcessOutput(process, pattern, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let output = "";
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out waiting for Chromium DevTools endpoint. ${output.slice(-400)}`));
+    }, timeoutMs);
+    const onData = (chunk) => {
+      output += chunk.toString();
+      const match = output.match(pattern);
+      if (match) {
+        cleanup();
+        resolve(match[1]);
+      }
+    };
+    const onExit = (code) => {
+      cleanup();
+      reject(new Error(`Chromium exited before DevTools was ready: ${code}. ${output.slice(-400)}`));
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      process.stderr.off("data", onData);
+      process.off("exit", onExit);
+    };
+    process.stderr.on("data", onData);
+    process.once("exit", onExit);
+  });
+}
+
+function createCdpClient(wsUrl) {
+  if (typeof WebSocket !== "function") {
+    throw new Error("Node.js WebSocket support is unavailable");
+  }
+  const ws = new WebSocket(wsUrl);
+  let nextId = 1;
+  const pending = new Map();
+  const openPromise = new Promise((resolve, reject) => {
+    ws.addEventListener("open", resolve, { once: true });
+    ws.addEventListener("error", () => reject(new Error("Chromium DevTools WebSocket failed")), { once: true });
+  });
+  ws.addEventListener("message", (event) => {
+    const message = JSON.parse(event.data);
+    if (!message.id || !pending.has(message.id)) {
+      return;
+    }
+    const { resolve, reject } = pending.get(message.id);
+    pending.delete(message.id);
+    if (message.error) {
+      reject(new Error(message.error.message || JSON.stringify(message.error)));
+    } else {
+      resolve(message.result || {});
+    }
+  });
+
+  return {
+    async send(method, params = {}, sessionId = "") {
+      await openPromise;
+      const id = nextId++;
+      const payload = { id, method, params };
+      if (sessionId) {
+        payload.sessionId = sessionId;
+      }
+      const response = new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+      });
+      ws.send(JSON.stringify(payload));
+      return response;
+    },
+    close() {
+      try {
+        ws.close();
+      } catch (_error) {
+        // Nothing useful to do during cleanup.
+      }
+    }
+  };
+}
+
+const STEALTH_SCRIPT = `
+(() => {
+  const nativeGetter = (name, value) => {
+    const getter = function() { return value; };
+    try { Object.defineProperty(getter, "toString", { value: () => "function get " + name + "() { [native code] }" }); } catch (_) {}
+    return getter;
+  };
+  const defineGetter = (target, key, getter) => {
+    try { Object.defineProperty(target, key, { get: getter, configurable: true }); } catch (_) {}
+  };
+  defineGetter(Navigator.prototype, "webdriver", nativeGetter("webdriver", undefined));
+  defineGetter(navigator, "webdriver", nativeGetter("webdriver", undefined));
+  defineGetter(navigator, "languages", nativeGetter("languages", ["zh-CN", "zh", "en"]));
+  const pluginArray = {
+    0: { name: "Chrome PDF Plugin" },
+    1: { name: "Chrome PDF Viewer" },
+    2: { name: "Native Client" },
+    length: 3,
+    item(index) { return this[index] || null; },
+    namedItem(name) { return Array.from({ length: this.length }, (_, index) => this[index]).find((plugin) => plugin.name === name) || null; },
+    [Symbol.toStringTag]: "PluginArray"
+  };
+  defineGetter(Navigator.prototype, "plugins", nativeGetter("plugins", pluginArray));
+  defineGetter(navigator, "plugins", nativeGetter("plugins", pluginArray));
+  window.chrome = window.chrome || {};
+  window.chrome.runtime = window.chrome.runtime || {};
+  window.chrome.runtime.connect = window.chrome.runtime.connect || function() { return {}; };
+  for (const key of ["webdriver_flag", "_phantom", "__clians", "selenium", "driver", "__webdriver_evaluate", "__webdriver_script_fn", "domAutomation", "domAutomationController"]) {
+    try { delete window[key]; } catch (_) {}
+    defineGetter(window, key, nativeGetter(key, undefined));
+  }
+})();
+`;
+
+async function renderHtmlWithChromium(command, url, requestConfig) {
+  const args = [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--disable-dev-shm-usage",
+    "--disable-blink-features=AutomationControlled",
+    "--disable-extensions",
+    "--remote-debugging-port=0",
+    ...(requestConfig.browserDataDir ? [`--user-data-dir=${requestConfig.browserDataDir}`] : []),
+    "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "about:blank"
+  ];
+  const chrome = spawn(command, args, { stdio: ["ignore", "ignore", "pipe"] });
+  let client;
+  try {
+    const wsUrl = await waitForProcessOutput(chrome, /DevTools listening on (ws:\/\/[^\s]+)/, Math.min(10000, requestConfig.browserTimeoutMs));
+    client = createCdpClient(wsUrl);
+    const { targetId } = await client.send("Target.createTarget", { url: "about:blank" });
+    const { sessionId } = await client.send("Target.attachToTarget", { targetId, flatten: true });
+    await client.send("Page.enable", {}, sessionId);
+    await client.send("Runtime.enable", {}, sessionId);
+    await client.send("Page.addScriptToEvaluateOnNewDocument", { source: STEALTH_SCRIPT }, sessionId);
+    await client.send("Page.navigate", { url }, sessionId);
+
+    const deadline = Date.now() + requestConfig.browserTimeoutMs;
+    let lastHtml = "";
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const evaluated = await client.send("Runtime.evaluate", {
+        expression: "({ html: document.documentElement ? document.documentElement.outerHTML : '', text: document.body ? document.body.innerText : '', href: location.href, readyState: document.readyState })",
+        returnByValue: true
+      }, sessionId);
+      const value = evaluated?.result?.value || {};
+      lastHtml = value.html || lastHtml;
+      const text = value.text || "";
+      const stillChecking = text.includes("安全验证中") || text.includes("正在确认您的浏览器安全环境");
+      if (lastHtml && value.readyState === "complete" && !stillChecking) {
+        return lastHtml;
+      }
+    }
+    return lastHtml;
+  } finally {
+    client?.close();
+    if (!chrome.killed) {
+      chrome.kill("SIGKILL");
+    }
+  }
 }
 
 async function ensureAdVerification(fetchImpl, pageUrl, requestConfig) {
@@ -858,6 +1016,10 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
   let useFallbackBase = false;
   const cookieJar = createCookieJar();
   const requestConfig = { ...config, cookieJar, abortSignal: options.signal, browserHtmlImpl: options.browserHtmlImpl };
+  const browserDataDir = config.browserFetch && !options.browserHtmlImpl ? await createBrowserDataDir() : "";
+  if (browserDataDir) {
+    requestConfig.browserDataDir = browserDataDir;
+  }
 
   const endPage = config.startPage + config.maxPages - 1;
   report({
@@ -974,6 +1136,24 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
   });
   if (config.resolveDetailUrls && selectedRows.length > 0) {
     await ensureAdVerification(fetchImpl, config.pageUrl, requestConfig);
+  }
+  if (config.browserFetch && requestConfig.browserDataDir && selectedRows.length > 0) {
+    const warmUrl = buildPageUrl(config.pageUrl, config.startPage) || config.pageUrl;
+    report({
+      phase: "browser:prewarm",
+      url: warmUrl,
+      message: "预热 Chromium 会话：打开采集列表页"
+    });
+    const warmResult = await fetchHtmlWithBrowser(warmUrl, requestConfig);
+    if (warmResult?.error) {
+      warnings.push(`Chromium 会话预热失败：${warmResult.error}`);
+      report({
+        phase: "browser:prewarm-error",
+        url: warmUrl,
+        error: warmResult.error,
+        message: "Chromium 会话预热失败"
+      });
+    }
   }
   const sources = [];
   const skippedSources = [];
@@ -1170,7 +1350,9 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
     message: `采集完成：成功 ${sources.length} 条，跳过 ${skippedSources.length} 条`
   });
 
-  return { config, sources, rows: selectedRows, pages, warnings, skippedSources };
+  const result = { config, sources, rows: selectedRows, pages, warnings, skippedSources };
+  await removeBrowserDataDir(browserDataDir);
+  return result;
 }
 
 export async function debugAutoSourceByIp(configValue = {}, targetIp = "", options = {}) {
@@ -1180,6 +1362,10 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
   const now = options.now || new Date();
   const cookieJar = createCookieJar();
   const requestConfig = { ...config, cookieJar, browserHtmlImpl: options.browserHtmlImpl };
+  const browserDataDir = config.browserFetch && !options.browserHtmlImpl ? await createBrowserDataDir() : "";
+  if (browserDataDir) {
+    requestConfig.browserDataDir = browserDataDir;
+  }
   const pages = [];
   const rows = [];
 
@@ -1222,6 +1408,9 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
   }
 
   await ensureAdVerification(fetchImpl, config.pageUrl, requestConfig);
+  if (config.browserFetch && requestConfig.browserDataDir) {
+    await fetchHtmlWithBrowser(buildPageUrl(config.pageUrl, config.startPage) || config.pageUrl, requestConfig);
+  }
   const detailUrl = buildDetailUrl(config.pageUrl, row);
   let detail;
   try {
