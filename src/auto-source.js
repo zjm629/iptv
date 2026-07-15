@@ -690,17 +690,20 @@ async function fetchDetailHtmlByClick(row, detailUrl, requestConfig, report = ()
   });
 
   if (typeof requestConfig.browserClickHtmlImpl === "function") {
-    const html = await withTimeout(
+    const rendered = await withTimeout(
       requestConfig.browserClickHtmlImpl({ startUrl, detailUrl, row, requestConfig }),
       requestConfig.browserTimeoutMs,
       `Browser click rendering timed out for ${row.ip}`
     );
+    const html = typeof rendered === "string" ? rendered : rendered?.html || "";
     return {
       response: { ok: true, status: 200 },
       html,
-      finalUrl: detailUrl,
+      finalUrl: typeof rendered === "object" && rendered?.finalUrl ? rendered.finalUrl : detailUrl,
       browser: true,
-      clicked: true
+      clicked: true,
+      channelListHtml: typeof rendered === "object" ? rendered.channelListHtml || "" : "",
+      channelListFinalUrl: typeof rendered === "object" ? rendered.channelListFinalUrl || "" : ""
     };
   }
 
@@ -724,7 +727,9 @@ async function fetchDetailHtmlByClick(row, detailUrl, requestConfig, report = ()
         html: rendered.html,
         finalUrl: rendered.finalUrl,
         browser: true,
-        clicked: true
+        clicked: true,
+        channelListHtml: rendered.channelListHtml || "",
+        channelListFinalUrl: rendered.channelListFinalUrl || ""
       };
     } catch (error) {
       const detail = error?.stderr || error?.message || error?.code || "unknown error";
@@ -1031,8 +1036,9 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
       clickedOnclick: clicked.onclick,
       message: `已点击列表源：${row.ip}`
     });
+    let detailPage;
     try {
-      return await waitForStablePage(client, sessionId, requestConfig, startUrl, { requireUrlChange: true });
+      detailPage = await waitForStablePage(client, sessionId, requestConfig, startUrl, { requireUrlChange: true });
     } catch (error) {
       if (!String(error?.message || error).includes("Clicked source link but URL did not change from list page")) {
         throw error;
@@ -1047,7 +1053,62 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
         message: `点击未跳转，改用同会话详情页：${row.ip}`
       });
       await client.send("Page.navigate", { url: detailUrl, referrer: startUrl }, sessionId, commandTimeoutMs);
-      return waitForStablePage(client, sessionId, requestConfig, detailUrl);
+      detailPage = await waitForStablePage(client, sessionId, requestConfig, detailUrl);
+    }
+
+    const channelListUrl = parseDetailChannelListUrl(detailPage.html, startUrl);
+    if (!channelListUrl) {
+      return detailPage;
+    }
+    try {
+      report({
+        phase: "source:channel-list-click",
+        ip: row.ip,
+        typeName: row.typeName,
+        channelListUrl,
+        message: `同会话点击频道列表：${row.ip}`
+      });
+      const channelClick = await client.send("Runtime.evaluate", {
+        expression: `(() => {
+          const wantedUrl = ${JSON.stringify(channelListUrl)};
+          const wantedToken = new URL(wantedUrl).searchParams.get("s") || "";
+          const links = Array.from(document.querySelectorAll("a"));
+          const link = links.find((item) => {
+            const href = item.href || item.getAttribute("href") || "";
+            const text = (item.textContent || "").trim();
+            return (wantedToken && href.includes(wantedToken)) ||
+              text.includes("\\u67e5\\u770b\\u9891\\u9053\\u5217\\u8868") ||
+              text.includes("\\u9891\\u9053\\u5217\\u8868");
+          });
+          if (!link) {
+            return { clicked: false, href: location.href, linkCount: links.length, text: document.body ? document.body.innerText.slice(0, 240) : "" };
+          }
+          link.scrollIntoView({ block: "center" });
+          link.click();
+          return { clicked: true, href: location.href, text: link.textContent || "", linkHref: link.href || link.getAttribute("href") || "" };
+        })()`,
+        returnByValue: true
+      }, sessionId, commandTimeoutMs);
+      const channelClicked = channelClick?.result?.value;
+      if (!channelClicked?.clicked) {
+        throw new Error(`Could not find channel list link on detail page: ${JSON.stringify(channelClicked || {})}`);
+      }
+      const channelPage = await waitForStablePage(client, sessionId, requestConfig, detailPage.finalUrl, { requireUrlChange: true });
+      return {
+        ...detailPage,
+        channelListHtml: channelPage.html,
+        channelListFinalUrl: channelPage.finalUrl
+      };
+    } catch (error) {
+      report({
+        phase: "source:channel-list-click-error",
+        ip: row.ip,
+        typeName: row.typeName,
+        channelListUrl,
+        error: formatFetchError(error, requestConfig),
+        message: `同会话频道列表点击失败：${row.ip}`
+      });
+      return detailPage;
     }
   } finally {
     client?.close();
@@ -1221,7 +1282,17 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
         channelListUrl,
         message: `分析频道列表：${row.ip}`
       });
-      channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig, detailUrl);
+      if (detail.channelListHtml) {
+        channelList = {
+          response: { ok: true, status: 200 },
+          html: detail.channelListHtml,
+          finalUrl: detail.channelListFinalUrl || channelListUrl,
+          browser: true,
+          clicked: true
+        };
+      } else {
+        channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig, detailUrl);
+      }
       report({
         phase: "source:channel-list-loaded",
         ip: row.ip,
@@ -1843,7 +1914,17 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
 
   let channelList;
   try {
-    channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig, detailUrl);
+    if (detail.channelListHtml) {
+      channelList = {
+        response: { ok: true, status: 200 },
+        html: detail.channelListHtml,
+        finalUrl: detail.channelListFinalUrl || channelListUrl,
+        browser: true,
+        clicked: true
+      };
+    } else {
+      channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig, detailUrl);
+    }
   } catch (error) {
     result.channelList = {
       url: channelListUrl,

@@ -636,6 +636,73 @@ describe("auto source discovery", () => {
     expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=real-click-token&t=multicast&channels=1&format=m3u");
   });
 
+  test("uses the same browser click flow to read protected channel list pages", async () => {
+    const directChannelListRequests = [];
+    const tableHtml = `
+      <table><tbody>
+      <tr>
+        <td><a onclick="gotoIP('click-token','multicast')">1.1.1.1</a></td>
+        <td>200</td><td>Sichuan Telecom</td>
+        <td>2026-07-13 06:30</td><td>2026-07-13 17:00:00</td>
+        <td><span>OK</span></td>
+      </tr>
+      </tbody></table>
+    `;
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("?s=session-channel-token&t=multicast")) {
+        directChannelListRequests.push(url);
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "<title>IPTV神器Pro</title><body>返回首页</body>"
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => tableHtml
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      maxPages: 1,
+      todayOnly: false,
+      onlyStatus: "OK",
+      browserFetch: true,
+      detailRetries: 0,
+      validateM3uUrls: false
+    }, {
+      fetchImpl: fetchMock,
+      browserClickHtmlImpl: async () => ({
+        html: '<a href="?s=session-channel-token&t=multicast">查看频道列表</a>',
+        finalUrl: "https://iptv.cqshushu.com/index.php?p=click-token&t=multicast",
+        channelListHtml: `
+          <a href="#"
+             onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=session-channel-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;"
+             title="M3U interface">M3U interface</a>
+        `,
+        channelListFinalUrl: "https://iptv.cqshushu.com/index.php?s=session-channel-token&t=multicast"
+      }),
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(directChannelListRequests).toEqual([]);
+    expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=session-channel-token&t=multicast&channels=1&format=m3u");
+  });
+
   test("does not fall back to decoy fetch detail pages when browser rendering fails", async () => {
     const fetchUrls = [];
     const tableHtml = `
