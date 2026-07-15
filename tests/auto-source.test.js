@@ -1,4 +1,4 @@
-import { browserCookiesFromHeader, chooseChannelListCandidate, debugAutoSourceByIp, discoverAutoSources, filterRows, isBaseIndexUrl, normalizeAutoSourceConfig, parseTableRows } from "../src/auto-source.js";
+import { browserCookiesFromHeader, centerPointFromRect, chooseChannelListCandidate, debugAutoSourceByIp, discoverAutoSources, filterRows, isBaseIndexUrl, normalizeAutoSourceConfig, parseTableRows } from "../src/auto-source.js";
 
 const SAMPLE_HTML = `
 <table><tbody>
@@ -107,6 +107,14 @@ describe("auto source discovery", () => {
       href: "https://iptv.cqshushu.com/index.php?s=real-token&t=multicast",
       token: "real-token"
     }));
+  });
+
+  test("computes the visible link center for trusted browser clicks", () => {
+    expect(centerPointFromRect({ x: 10, y: 20, width: 101, height: 31 })).toEqual({
+      x: 61,
+      y: 36
+    });
+    expect(centerPointFromRect({ x: 10, y: 20, width: 0, height: 31 })).toBeNull();
   });
 
   test("uses browser-like headers for discovery requests", async () => {

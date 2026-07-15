@@ -752,6 +752,48 @@ function withTimeout(promise, timeoutMs, message) {
   ]);
 }
 
+function centerPointFromRect(rect = {}) {
+  const x = Number(rect.x ?? rect.left);
+  const y = Number(rect.y ?? rect.top);
+  const width = Number(rect.width);
+  const height = Number(rect.height);
+  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
+    return null;
+  }
+  return {
+    x: Math.round(x + width / 2),
+    y: Math.round(y + height / 2)
+  };
+}
+
+async function dispatchTrustedClick(client, sessionId, point, commandTimeoutMs) {
+  if (!point) {
+    throw new Error("Cannot dispatch trusted click without a visible target point");
+  }
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: point.x,
+    y: point.y,
+    button: "none"
+  }, sessionId, commandTimeoutMs);
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1
+  }, sessionId, commandTimeoutMs);
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1
+  }, sessionId, commandTimeoutMs);
+}
+
 async function fetchDetailHtmlByClick(row, detailUrl, requestConfig, report = () => {}) {
   const startUrl = row.discoveryPageUrl || requestConfig.pageUrl;
   if (!requestConfig.browserFetch || !startUrl) {
@@ -1089,9 +1131,15 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
         if (!link) {
           return { clicked: false, href: location.href, linkCount: links.length, text: document.body ? document.body.innerText.slice(0, 240) : "" };
         }
-        link.scrollIntoView({ block: "center" });
-        link.click();
-        return { clicked: true, href: location.href, text: link.textContent || "", onclick: link.getAttribute("onclick") || "" };
+        link.scrollIntoView({ block: "center", inline: "center" });
+        const rect = link.getBoundingClientRect();
+        return {
+          clicked: true,
+          href: location.href,
+          text: link.textContent || "",
+          onclick: link.getAttribute("onclick") || "",
+          rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+        };
       })()`,
       returnByValue: true
     }, sessionId, commandTimeoutMs);
@@ -1099,6 +1147,7 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
     if (!clicked?.clicked) {
       throw new Error(`Could not find source IP link on list page: ${JSON.stringify(clicked || {})}`);
     }
+    await dispatchTrustedClick(client, sessionId, centerPointFromRect(clicked.rect), commandTimeoutMs);
     report({
       phase: "source:detail-clicked",
       ip: row.ip,
@@ -1167,9 +1216,15 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
           if (!link) {
             return { clicked: false, href: location.href, linkCount: links.length, text: document.body ? document.body.innerText.slice(0, 240) : "" };
           }
-          link.scrollIntoView({ block: "center" });
-          link.click();
-          return { clicked: true, href: location.href, text: link.textContent || "", linkHref: link.href || link.getAttribute("href") || "" };
+          link.scrollIntoView({ block: "center", inline: "center" });
+          const rect = link.getBoundingClientRect();
+          return {
+            clicked: true,
+            href: location.href,
+            text: link.textContent || "",
+            linkHref: link.href || link.getAttribute("href") || "",
+            rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+          };
         })()`,
         returnByValue: true
       }, sessionId, commandTimeoutMs);
@@ -1177,6 +1232,7 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
       if (!channelClicked?.clicked) {
         throw new Error(`Could not find channel list link on detail page: ${JSON.stringify(channelClicked || {})}`);
       }
+      await dispatchTrustedClick(client, sessionId, centerPointFromRect(channelClicked.rect), commandTimeoutMs);
       const channelPage = await waitForStablePage(client, sessionId, requestConfig, detailPage.finalUrl, { requireUrlChange: true });
       const actualChannelListUrl = normalizeChannelListUrl(startUrl, channelPage.finalUrl);
       if (!actualChannelListUrl) {
@@ -2164,4 +2220,4 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
   return result;
 }
 
-export { browserCookiesFromHeader, chooseChannelListCandidate, filterRows, isBaseIndexUrl, normalizeAutoSourceConfig, parseTableRows, todayInShanghai };
+export { browserCookiesFromHeader, centerPointFromRect, chooseChannelListCandidate, filterRows, isBaseIndexUrl, normalizeAutoSourceConfig, parseTableRows, todayInShanghai };
