@@ -280,6 +280,33 @@ function isChannelListLink(label) {
   return text.includes("查看频道列表") || text.includes("频道列表");
 }
 
+function hasChannelListText(value = "") {
+  const text = stripTags(decodeHtmlEntities(value));
+  return text.includes("\u67e5\u770b\u9891\u9053\u5217\u8868") ||
+    text.includes("\u9891\u9053\u5217\u8868") ||
+    isChannelListLink(text);
+}
+
+function chooseChannelListCandidate(candidates = [], preferredUrl = "") {
+  const preferredToken = readSourceToken("https://iptv.cqshushu.com/index.php", preferredUrl);
+  const scored = candidates.map((candidate, index) => {
+    const href = String(candidate.href || "");
+    const text = String(candidate.text || "");
+    const title = String(candidate.title || "");
+    const isChannelText = hasChannelListText(`${text} ${title}`);
+    const token = readSourceToken("https://iptv.cqshushu.com/index.php", href);
+    const score =
+      (candidate.visible ? 200 : 0) +
+      (isChannelText ? 100 : 0) +
+      (token ? 30 : 0) +
+      (preferredToken && token === preferredToken ? 5 : 0);
+    return { ...candidate, index, score, isChannelText, token };
+  }).filter((candidate) => candidate.score > 0);
+
+  scored.sort((left, right) => right.score - left.score || left.index - right.index);
+  return scored[0] || null;
+}
+
 function isM3uInterfaceLink(label) {
   const text = stripTags(decodeHtmlEntities(label));
   return /M3U\s*接口/i.test(text);
@@ -397,6 +424,22 @@ function summarizeHtmlPage(html = "") {
     hasChannelListText: source.includes("查看频道列表") || source.includes("频道列表"),
     anchorCount: (source.match(/<a\b/gi) || []).length,
     anchors
+  };
+}
+
+function validateDetailPageForRow(html = "", row = {}, pageUrl = "https://iptv.cqshushu.com/index.php") {
+  const summary = summarizeHtmlPage(html);
+  const expectedIp = String(row.ip || "").trim();
+  const channelListUrl = parseDetailChannelListUrl(html, pageUrl);
+  const bodyText = stripTags(decodeHtmlEntities(html)).replace(/\s+/g, " ").trim();
+  const hasExpectedIp = expectedIp ? bodyText.includes(expectedIp) : true;
+
+  return {
+    ok: Boolean(channelListUrl) && hasExpectedIp,
+    expectedIp,
+    hasExpectedIp,
+    channelListUrl,
+    summary
   };
 }
 
@@ -1099,8 +1142,9 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
       detailPage = await waitForStablePage(client, sessionId, requestConfig, detailUrl);
     }
 
-    const channelListUrl = parseDetailChannelListUrl(detailPage.html, startUrl);
-    if (!channelListUrl) {
+    const preferredChannelListUrl = parseDetailChannelListUrl(detailPage.html, startUrl);
+    const selectedChannel = await waitForChannelListCandidate(client, sessionId, requestConfig, preferredChannelListUrl);
+    if (!selectedChannel) {
       return detailPage;
     }
     try {
@@ -1108,32 +1152,18 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
         phase: "source:channel-list-click",
         ip: row.ip,
         typeName: row.typeName,
-        channelListUrl,
+        channelListUrl: selectedChannel.href,
         message: `同会话点击频道列表：${row.ip}`
       });
       const channelClick = await client.send("Runtime.evaluate", {
         expression: `(() => {
-          const wantedUrl = ${JSON.stringify(channelListUrl)};
-          const wantedToken = new URL(wantedUrl).searchParams.get("s") || "";
+          const wantedIndex = ${JSON.stringify(selectedChannel.index)};
+          const wantedHref = ${JSON.stringify(selectedChannel.href)};
           const links = Array.from(document.querySelectorAll("a"));
-          const isVisible = (item) => {
-            const rect = item.getBoundingClientRect();
-            const style = window.getComputedStyle(item);
-            return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-          };
-          const candidates = links.map((item) => {
+          const link = links[wantedIndex] || links.find((item) => {
             const href = item.href || item.getAttribute("href") || "";
-            const text = (item.textContent || "").trim();
-            const isChannelText =
-              text.includes("\\u67e5\\u770b\\u9891\\u9053\\u5217\\u8868") ||
-              text.includes("\\u9891\\u9053\\u5217\\u8868");
-            const score = (isChannelText && isVisible(item) ? 100 : 0) +
-              (isChannelText ? 50 : 0) +
-              (wantedToken && href.includes(wantedToken) ? 10 : 0);
-            return { item, href, text, score };
-          }).filter((candidate) => candidate.score > 0).sort((left, right) => right.score - left.score);
-          const selected = candidates[0];
-          const link = selected?.item;
+            return href === wantedHref;
+          });
           if (!link) {
             return { clicked: false, href: location.href, linkCount: links.length, text: document.body ? document.body.innerText.slice(0, 240) : "" };
           }
@@ -1154,7 +1184,7 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
           phase: "source:channel-list-redirect-home",
           ip: row.ip,
           typeName: row.typeName,
-          channelListUrl,
+          channelListUrl: selectedChannel.href,
           finalUrl: channelPage.finalUrl,
           clickedText: channelClicked.text,
           clickedLinkHref: channelClicked.linkHref,
@@ -1174,7 +1204,7 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
         phase: "source:channel-list-click-error",
         ip: row.ip,
         typeName: row.typeName,
-        channelListUrl,
+        channelListUrl: selectedChannel.href,
         error: formatFetchError(error, requestConfig),
         message: `同会话频道列表点击失败：${row.ip}`
       });
@@ -1223,6 +1253,61 @@ async function waitForStablePage(client, sessionId, requestConfig, fallbackUrl =
     throw new Error(`Clicked source link but URL did not change from list page: ${fallbackUrl}`);
   }
   return { html: lastHtml, finalUrl: lastFinalUrl };
+}
+
+async function readChannelListCandidates(client, sessionId, commandTimeoutMs) {
+  const evaluated = await client.send("Runtime.evaluate", {
+    expression: `(() => {
+      const links = Array.from(document.querySelectorAll("a"));
+      return links.map((item, index) => {
+        const rect = item.getBoundingClientRect();
+        const style = window.getComputedStyle(item);
+        const visible = rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+        return {
+          index,
+          href: item.href || item.getAttribute("href") || "",
+          text: (item.textContent || "").trim(),
+          title: item.getAttribute("title") || "",
+          visible
+        };
+      });
+    })()`,
+    returnByValue: true
+  }, sessionId, commandTimeoutMs);
+  return evaluated?.result?.value || [];
+}
+
+async function waitForChannelListCandidate(client, sessionId, requestConfig, preferredUrl = "") {
+  const deadline = Date.now() + requestConfig.browserTimeoutMs;
+  const commandTimeoutMs = cdpCommandTimeoutMs(requestConfig);
+  let lastSelected = null;
+  let stableCount = 0;
+
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    const candidates = await readChannelListCandidates(
+      client,
+      sessionId,
+      Math.min(commandTimeoutMs, Math.max(500, deadline - Date.now()))
+    );
+    const selected = chooseChannelListCandidate(candidates, preferredUrl);
+    if (!selected) {
+      lastSelected = null;
+      stableCount = 0;
+      continue;
+    }
+    if (lastSelected?.href === selected.href && lastSelected?.index === selected.index) {
+      stableCount += 1;
+    } else {
+      stableCount = 1;
+      lastSelected = selected;
+    }
+    if (stableCount >= 2) {
+      return selected;
+    }
+  }
+
+  return lastSelected;
 }
 
 async function ensureAdVerification(fetchImpl, pageUrl, requestConfig) {
@@ -1317,9 +1402,36 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
       continue;
     }
     previousStatus = detail.response.status;
-    const channelListUrl = detail.response.ok ? parseDetailChannelListUrl(detail.html, requestConfig.pageUrl) : "";
+    const detailValidation = detail.response.ok
+      ? validateDetailPageForRow(detail.html, row, requestConfig.pageUrl)
+      : { ok: false, channelListUrl: "", summary: summarizeHtmlPage(detail.html), hasExpectedIp: false, expectedIp: row.ip };
+    const channelListUrl = detailValidation.channelListUrl;
+    if (detail.response.ok && detail.clicked === true && !detailValidation.ok) {
+      lastDetailSummary = detailValidation.summary;
+      report({
+        phase: "source:detail-mismatch",
+        ip: row.ip,
+        typeName: row.typeName,
+        attempt: attempt + 1,
+        detailUrl,
+        finalUrl: detail.finalUrl,
+        status: detail.response.status,
+        expectedIp: detailValidation.expectedIp,
+        hasExpectedIp: detailValidation.hasExpectedIp,
+        hasChannelListUrl: Boolean(channelListUrl),
+        pageTitle: detailValidation.summary.title,
+        pageText: detailValidation.summary.text,
+        pageBytes: detailValidation.summary.bytes,
+        hasSecurityChallenge: detailValidation.summary.hasSecurityChallenge,
+        hasAccessDenied: detailValidation.summary.hasAccessDenied,
+        anchorCount: detailValidation.summary.anchorCount,
+        anchors: detailValidation.summary.anchors,
+        message: `详情页内容不匹配：${row.ip}`
+      });
+      continue;
+    }
     if (!channelListUrl) {
-      const detailSummary = summarizeHtmlPage(detail.html);
+      const detailSummary = detailValidation.summary;
       lastDetailSummary = detailSummary;
       report({
         phase: "source:detail-miss",
@@ -2052,4 +2164,4 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
   return result;
 }
 
-export { browserCookiesFromHeader, filterRows, isBaseIndexUrl, normalizeAutoSourceConfig, parseTableRows, todayInShanghai };
+export { browserCookiesFromHeader, chooseChannelListCandidate, filterRows, isBaseIndexUrl, normalizeAutoSourceConfig, parseTableRows, todayInShanghai };
