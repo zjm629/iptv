@@ -69,7 +69,11 @@ describe("auto source discovery", () => {
       enabled: false,
       keywords: ["电信"],
       disabledTypeNames: [],
-      browserProfile: true
+      browserProfile: true,
+      pageDelayMs: 3000,
+      rateLimitDelayMs: 30000,
+      detailDelayMs: 3000,
+      detailRetryDelayMs: 15000
     }));
   });
 
@@ -899,6 +903,9 @@ describe("auto source discovery", () => {
       maxPages: 1,
       todayOnly: false,
       onlyStatus: "",
+      pageDelayMs: 0,
+      detailDelayMs: 0,
+      rateLimitDelayMs: 0,
       detailRetries: 0,
       m3uCheckRetries: 0,
       emptyM3uResolveRetries: 0
@@ -1067,6 +1074,75 @@ describe("auto source discovery", () => {
 
     expect(waits).toEqual([999]);
     expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=after-rate-limit&t=multicast&channels=1&format=m3u");
+  });
+
+  test("uses the longer rate-limit delay when browser click sees too frequent text", async () => {
+    const waits = [];
+    let clickRequests = 0;
+    const tableHtml = `
+      <table><tbody>
+      <tr>
+        <td><a onclick="gotoIP('top-sichuan','multicast')">1.1.1.1</a></td>
+        <td>200</td><td>Sichuan Telecom</td>
+        <td>2026-07-13 06:30</td><td>2026-07-13 17:00:00</td>
+        <td><span>OK</span></td>
+      </tr>
+      </tbody></table>
+    `;
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => tableHtml
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      maxPages: 1,
+      todayOnly: false,
+      onlyStatus: "OK",
+      browserFetch: true,
+      detailRetries: 1,
+      detailRetryDelayMs: 111,
+      rateLimitDelayMs: 999,
+      validateM3uUrls: false
+    }, {
+      fetchImpl: fetchMock,
+      sleepImpl: async (ms) => waits.push(ms),
+      browserClickHtmlImpl: async () => {
+        clickRequests += 1;
+        if (clickRequests === 1) {
+          throw new Error("Could not find source IP link on list page: {\"text\":\"访问过于频繁，请稍后再试。\"}");
+        }
+        return '<a href="?s=after-too-frequent&t=multicast">查看频道列表</a>';
+      },
+      browserHtmlImpl: async (url) => {
+        if (url.includes("?s=after-too-frequent&t=multicast")) {
+          return `
+            <a href="#"
+               onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=after-too-frequent&t=multicast&channels=1&format=m3u'); return false;"
+               title="M3U interface">M3U interface</a>
+          `;
+        }
+        return tableHtml;
+      },
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(waits).toEqual([999]);
+    expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=after-too-frequent&t=multicast&channels=1&format=m3u");
   });
 
   test("deduplicates sources that resolve to the same real m3u url", async () => {

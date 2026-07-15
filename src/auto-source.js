@@ -75,12 +75,12 @@ function normalizeAutoSourceConfig(value = {}) {
     uniqueByType: value.uniqueByType !== false,
     startPage: parseBoundedInteger(value.startPage ?? "1", 1, 1, 200),
     maxPages: parseBoundedInteger(value.maxPages ?? "20", 20, 1, 20),
-    pageDelayMs: parseBoundedInteger(value.pageDelayMs ?? "1500", 1500, 0, 5000),
+    pageDelayMs: parseBoundedInteger(value.pageDelayMs ?? "3000", 3000, 0, 10000),
     rateLimitRetries: parseBoundedInteger(value.rateLimitRetries ?? "2", 2, 0, 5),
-    rateLimitDelayMs: parseBoundedInteger(value.rateLimitDelayMs ?? "5000", 5000, 0, 300000),
-    detailDelayMs: parseBoundedInteger(value.detailDelayMs ?? "1200", 1200, 0, 10000),
+    rateLimitDelayMs: parseBoundedInteger(value.rateLimitDelayMs ?? "30000", 30000, 0, 300000),
+    detailDelayMs: parseBoundedInteger(value.detailDelayMs ?? "3000", 3000, 0, 30000),
     detailRetries: parseBoundedInteger(value.detailRetries ?? "1", 1, 0, 3),
-    detailRetryDelayMs: parseBoundedInteger(value.detailRetryDelayMs ?? "5000", 5000, 0, 30000),
+    detailRetryDelayMs: parseBoundedInteger(value.detailRetryDelayMs ?? "15000", 15000, 0, 60000),
     m3uCheckRetries: parseBoundedInteger(value.m3uCheckRetries ?? "2", 2, 0, 5),
     m3uCheckRetryDelayMs: parseBoundedInteger(value.m3uCheckRetryDelayMs ?? "5000", 5000, 0, 30000),
     emptyM3uResolveRetries: parseBoundedInteger(value.emptyM3uResolveRetries ?? "0", 0, 0, 5),
@@ -553,6 +553,21 @@ function retryDelayForStatus(status, normalDelayMs, rateLimitDelayMs, attempt) {
   return normalDelay;
 }
 
+function isTooFrequentError(error) {
+  const message = error?.message || String(error || "");
+  return message.includes("访问过于频繁") ||
+    message.includes("請稍後再試") ||
+    message.includes("请稍后再试") ||
+    /too\s+frequent|rate\s*limit/i.test(message);
+}
+
+function isBrowserPageFlowError(error) {
+  const message = error?.message || String(error || "");
+  return isTooFrequentError(error) ||
+    message.includes("Could not find source IP link on list page") ||
+    message.includes("Clicked source link but URL did not change from list page");
+}
+
 async function fetchWithSession(fetchImpl, url, requestConfig) {
   let response = await fetchDiscoveryPage(fetchImpl, url, requestConfig);
   requestConfig.cookieJar.store(response.headers);
@@ -715,6 +730,11 @@ async function fetchDetailHtmlByClick(row, detailUrl, requestConfig, report = ()
       errors.push(`${command}: ${String(detail).trim().slice(0, 240)}`);
       if (error?.code === "ENOENT") {
         continue;
+      }
+      if (isBrowserPageFlowError(error)) {
+        return {
+          error: `Chromium click rendering failed for ${detailUrl}: ${errors.join("; ") || "browser page flow error"}`
+        };
       }
     }
   }
@@ -1114,6 +1134,9 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
       });
     } catch (error) {
       throwIfAborted(requestConfig.abortSignal);
+      if (isTooFrequentError(error)) {
+        previousStatus = 429;
+      }
       report({
         phase: "source:detail-error",
         ip: row.ip,
