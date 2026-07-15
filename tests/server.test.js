@@ -1010,11 +1010,12 @@ describe("server routes", () => {
   });
 
   test("returns web management page", async () => {
-    const response = await request(createApp(createFakeStore())).get("/");
+    const response = await request(createApp(createFakeStore(), { appVersion: "abc1234" })).get("/");
 
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("text/html");
     expect(response.text).toContain("IPTV M3U Manager");
+    expect(response.text).toContain("版本：abc1234");
     expect(response.text).toContain("source-editor");
     expect(response.text).toContain("/collector");
     expect(response.text).toContain("auto-source-editor");
@@ -1041,11 +1042,12 @@ describe("server routes", () => {
   });
 
   test("returns collector page", async () => {
-    const response = await request(createApp(createFakeStore())).get("/collector");
+    const response = await request(createApp(createFakeStore(), { appVersion: "abc1234" })).get("/collector");
 
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("text/html");
     expect(response.text).toContain("自动采集");
+    expect(response.text).toContain("版本：abc1234");
     expect(response.text).toContain("collector-page-url");
     expect(response.text).toContain("https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1");
     expect(response.text).toContain("/api/auto-sources/collect");
@@ -1062,6 +1064,13 @@ describe("server routes", () => {
     expect(response.text).toContain("服务器返回空响应");
     expect(response.text).toContain("服务器返回的不是 JSON");
     expect(response.text).toContain("未解析到源列表");
+  });
+
+  test("returns app version as json", async () => {
+    const response = await request(createApp(createFakeStore(), { appVersion: "abc1234" })).get("/api/version");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ version: "abc1234" });
   });
 
   test("starts listening before the initial refresh finishes", async () => {

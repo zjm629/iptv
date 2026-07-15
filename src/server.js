@@ -2,6 +2,7 @@ import express from "express";
 import cron from "node-cron";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
@@ -12,6 +13,8 @@ import { fileURLToPath } from "node:url";
 import { generateLiveM3u, generateLiveTxt, generatePlaylist, generateSourcePlaylist } from "./m3u.js";
 import { createStore } from "./store.js";
 import { renderCollectorPage, renderHomePage, renderPlayerPage } from "./web.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const TEST_PLAYLIST_FILES = new Set([
   "test1.m3u",
@@ -25,6 +28,25 @@ export const DEFAULT_HLS_START_TIMEOUT_MS = 25000;
 
 function getBaseUrl(req) {
   return `${req.protocol}://${req.get("host")}`;
+}
+
+function readAppVersion(options = {}) {
+  if (options.appVersion) {
+    return String(options.appVersion);
+  }
+  if (process.env.APP_VERSION) {
+    return process.env.APP_VERSION;
+  }
+  try {
+    const versionPath = path.join(__dirname, "..", "build-version.json");
+    const parsed = JSON.parse(fsSync.readFileSync(versionPath, "utf8"));
+    if (parsed?.commit) {
+      return String(parsed.commit);
+    }
+  } catch (_error) {
+    // Local dev without a build-version file.
+  }
+  return "unknown";
 }
 
 function ensureChannelsAvailable(res, channels, type = "json") {
@@ -202,6 +224,7 @@ export function createApp(store, options = {}) {
   const app = express();
   app.set("trust proxy", true);
   app.use(express.json());
+  const appVersion = readAppVersion(options);
   const spawnImpl = options.spawnImpl || spawn;
   const ffmpegPath = options.ffmpegPath || process.env.FFMPEG_PATH || "ffmpeg";
   const hlsRoot = options.hlsRoot || process.env.HLS_CACHE_DIR || path.join(os.tmpdir(), "iptv-hls-preview");
@@ -338,11 +361,15 @@ export function createApp(store, options = {}) {
   }
 
   app.get("/", (_req, res) => {
-    res.type("html").send(renderHomePage());
+    res.type("html").send(renderHomePage({ appVersion }));
   });
 
   app.get("/collector", (_req, res) => {
-    res.type("html").send(renderCollectorPage());
+    res.type("html").send(renderCollectorPage({ appVersion }));
+  });
+
+  app.get("/api/version", (_req, res) => {
+    res.json({ version: appVersion });
   });
 
   app.get("/api/status", (_req, res) => {

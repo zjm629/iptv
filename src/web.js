@@ -94,7 +94,12 @@ function baseStyles() {
   `;
 }
 
-export function renderHomePage() {
+function renderVersion(version) {
+  return `<div class="muted">版本：${escapeHtmlValue(version || "unknown")}</div>`;
+}
+
+export function renderHomePage(options = {}) {
+  const appVersion = options.appVersion || "unknown";
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -265,6 +270,7 @@ export function renderHomePage() {
     <div>
       <h1>IPTV M3U Manager</h1>
       <div class="muted" id="subtitle">Loading...</div>
+      ${renderVersion(appVersion)}
     </div>
     <div class="header-actions">
       <a class="linklike" href="/collector">自动采集</a>
@@ -812,7 +818,8 @@ export function renderHomePage() {
 </html>`;
 }
 
-export function renderCollectorPage() {
+export function renderCollectorPage(options = {}) {
+  const appVersion = options.appVersion || "unknown";
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -925,6 +932,7 @@ export function renderCollectorPage() {
     <div>
       <h1>自动采集</h1>
       <div class="muted" id="subtitle">采集完成后会自动加入首页采集源</div>
+      ${renderVersion(appVersion)}
     </div>
     <a class="linklike" href="/">返回首页</a>
   </header>

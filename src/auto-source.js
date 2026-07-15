@@ -704,6 +704,7 @@ async function checkM3uUrlWithRetries(fetchImpl, url, referer, requestConfig, sl
       status: lastCheck.status,
       channelLines: lastCheck.channelLines,
       bytes: lastCheck.bytes,
+      head: lastCheck.head,
       error: lastCheck.error,
       message: `M3U 校验结果：${row.ip}，频道 ${lastCheck.channelLines || 0} 个`
     });
