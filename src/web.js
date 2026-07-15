@@ -1026,6 +1026,7 @@ export function renderCollectorPage(options = {}) {
         "<span>" + escapeHtml(event.message || event.phase || "") +
         (event.error ? "；" + escapeHtml(event.error) : "") +
         (event.finalUrl ? "；实际 " + escapeHtml(event.finalUrl) : "") +
+        (event.m3uUrl ? "；M3U 实际地址 " + escapeHtml(event.m3uUrl) : "") +
         (event.pageTitle ? "；标题 " + escapeHtml(event.pageTitle) : "") +
         (event.hasSecurityChallenge ? "；安全验证页" : "") +
         (event.hasAccessDenied ? "；访问被拒绝" : "") +

@@ -1050,6 +1050,8 @@ describe("server routes", () => {
     expect(response.text).toContain("版本：abc1234");
     expect(response.text).toContain("collector-page-url");
     expect(response.text).toContain("collector-click-delay");
+    expect(response.text).toContain("event.m3uUrl");
+    expect(response.text).toContain("M3U 实际地址");
     expect(response.text).toContain("https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1");
     expect(response.text).toContain("/api/auto-sources/collect");
     expect(response.text).toContain("select-all");

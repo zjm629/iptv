@@ -278,6 +278,10 @@ function parseDetailChannelListUrl(html = "", pageUrl = "https://iptv.cqshushu.c
   return "";
 }
 
+function chooseActualChannelListUrl(pageUrl, parsedUrl = "", finalUrl = "") {
+  return normalizeChannelListUrl(pageUrl, finalUrl) || parsedUrl;
+}
+
 function parseChannelListM3uUrl(html = "", pageUrl = "https://iptv.cqshushu.com/index.php", expectedToken = "") {
   const source = String(html);
   const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
@@ -1073,13 +1077,24 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
           const wantedUrl = ${JSON.stringify(channelListUrl)};
           const wantedToken = new URL(wantedUrl).searchParams.get("s") || "";
           const links = Array.from(document.querySelectorAll("a"));
-          const link = links.find((item) => {
+          const isVisible = (item) => {
+            const rect = item.getBoundingClientRect();
+            const style = window.getComputedStyle(item);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+          };
+          const candidates = links.map((item) => {
             const href = item.href || item.getAttribute("href") || "";
             const text = (item.textContent || "").trim();
-            return (wantedToken && href.includes(wantedToken)) ||
+            const isChannelText =
               text.includes("\\u67e5\\u770b\\u9891\\u9053\\u5217\\u8868") ||
               text.includes("\\u9891\\u9053\\u5217\\u8868");
-          });
+            const score = (isChannelText && isVisible(item) ? 100 : 0) +
+              (isChannelText ? 50 : 0) +
+              (wantedToken && href.includes(wantedToken) ? 10 : 0);
+            return { item, href, text, score };
+          }).filter((candidate) => candidate.score > 0).sort((left, right) => right.score - left.score);
+          const selected = candidates[0];
+          const link = selected?.item;
           if (!link) {
             return { clicked: false, href: location.href, linkCount: links.length, text: document.body ? document.body.innerText.slice(0, 240) : "" };
           }
@@ -1094,10 +1109,26 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
         throw new Error(`Could not find channel list link on detail page: ${JSON.stringify(channelClicked || {})}`);
       }
       const channelPage = await waitForStablePage(client, sessionId, requestConfig, detailPage.finalUrl, { requireUrlChange: true });
+      const actualChannelListUrl = normalizeChannelListUrl(startUrl, channelPage.finalUrl);
+      if (!actualChannelListUrl) {
+        report({
+          phase: "source:channel-list-redirect-home",
+          ip: row.ip,
+          typeName: row.typeName,
+          channelListUrl,
+          finalUrl: channelPage.finalUrl,
+          clickedText: channelClicked.text,
+          clickedLinkHref: channelClicked.linkHref,
+          message: `频道列表点击后回到首页：${row.ip}`
+        });
+        return detailPage;
+      }
       return {
         ...detailPage,
         channelListHtml: channelPage.html,
-        channelListFinalUrl: channelPage.finalUrl
+        channelListFinalUrl: actualChannelListUrl,
+        channelListClickedText: channelClicked.text,
+        channelListClickedHref: channelClicked.linkHref
       };
     } catch (error) {
       report({
@@ -1293,12 +1324,14 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
       } else {
         channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig, detailUrl);
       }
+      channelList.actualUrl = chooseActualChannelListUrl(requestConfig.pageUrl, channelListUrl, channelList.finalUrl);
       report({
         phase: "source:channel-list-loaded",
         ip: row.ip,
         typeName: row.typeName,
         attempt: attempt + 1,
-        channelListUrl,
+        channelListUrl: channelList.actualUrl,
+        parsedChannelListUrl: channelListUrl,
         finalUrl: channelList.finalUrl,
         browser: channelList.browser === true,
         message: `频道列表已读取：${row.ip}${channelList.browser ? "（Chromium 渲染）" : ""}`
@@ -1317,25 +1350,26 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
       continue;
     }
     previousStatus = channelList.response.status;
-    const expectedToken = readSourceToken(requestConfig.pageUrl, channelListUrl);
+    const actualChannelListUrl = channelList.actualUrl || channelListUrl;
+    const expectedToken = readSourceToken(requestConfig.pageUrl, actualChannelListUrl);
     const m3uUrl = channelList.response.ok ? parseChannelListM3uUrl(channelList.html, requestConfig.pageUrl, expectedToken) : "";
     if (m3uUrl) {
       report({
         phase: "source:m3u-url",
         ip: row.ip,
         typeName: row.typeName,
-        channelListUrl,
+        channelListUrl: actualChannelListUrl,
         m3uUrl,
         message: `取到 M3U 接口：${row.ip}`
       });
-      return { m3uUrl, channelListUrl };
+      return { m3uUrl, channelListUrl: actualChannelListUrl };
     }
     report({
       phase: "source:m3u-miss",
       ip: row.ip,
       typeName: row.typeName,
       attempt: attempt + 1,
-      channelListUrl,
+      channelListUrl: actualChannelListUrl,
       status: channelList.response.status,
       message: `未找到 M3U 接口：${row.ip}`
     });
@@ -1899,13 +1933,13 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
     return result;
   }
   const channelListUrl = detail.response.ok ? parseDetailChannelListUrl(detail.html, config.pageUrl) : "";
-  const expectedToken = readSourceToken(config.pageUrl, channelListUrl);
+  const detailExpectedToken = readSourceToken(config.pageUrl, channelListUrl);
   result.detail = {
     url: detailUrl,
     status: detail.response.status,
     channelListUrl,
-    expectedToken,
-    anchors: summarizeTokenAnchors(detail.html, config.pageUrl, expectedToken)
+    expectedToken: detailExpectedToken,
+    anchors: summarizeTokenAnchors(detail.html, config.pageUrl, detailExpectedToken)
   };
 
   if (!channelListUrl) {
@@ -1935,9 +1969,11 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
     };
     return result;
   }
+  const actualChannelListUrl = chooseActualChannelListUrl(config.pageUrl, channelListUrl, channelList.finalUrl);
+  const expectedToken = readSourceToken(config.pageUrl, actualChannelListUrl);
   const selectedM3uUrl = channelList.response.ok ? parseChannelListM3uUrl(channelList.html, config.pageUrl, expectedToken) : "";
   result.channelList = {
-    url: channelListUrl,
+    url: actualChannelListUrl,
     status: channelList.response.status,
     anchors: summarizeTokenAnchors(channelList.html, config.pageUrl, expectedToken),
     selectedM3uUrl
@@ -1949,7 +1985,7 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
         headers: {
           "user-agent": "Mozilla/5.0 IPTV-M3U-Manager/1.0",
           "accept": "*/*",
-          "referer": channelListUrl
+          "referer": actualChannelListUrl
         }
       }, requestConfig.requestTimeoutMs);
       const text = await m3uResponse.text();
