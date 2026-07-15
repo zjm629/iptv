@@ -39,8 +39,37 @@ describe("auto source discovery", () => {
     expect(normalizeAutoSourceConfig({})).toEqual(expect.objectContaining({
       enabled: false,
       keywords: ["电信"],
-      disabledTypeNames: []
+      disabledTypeNames: [],
+      browserProfile: true
     }));
+  });
+
+  test("uses browser-like headers for discovery requests", async () => {
+    const requests = [];
+    const fetchMock = async (url, options = {}) => {
+      requests.push({ url, headers: options.headers || {} });
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => SAMPLE_HTML
+      };
+    };
+
+    await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      maxPages: 1,
+      resolveDetailUrls: false
+    }, {
+      fetchImpl: fetchMock,
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(requests[0].headers["user-agent"]).toContain("Chrome");
+    expect(requests[0].headers["sec-fetch-mode"]).toBe("navigate");
+    expect(requests[0].headers["upgrade-insecure-requests"]).toBe("1");
   });
 
   test("parses cqshushu table rows", () => {
@@ -825,5 +854,33 @@ describe("auto source discovery", () => {
       })
     ]);
     expect(result.row).toBeNull();
+  });
+
+  test("debug discovery reports source-site access denied responses", async () => {
+    const fetchMock = async () => ({
+      ok: false,
+      status: 403,
+      headers: { get: () => null },
+      text: async () => "<h1>Access denied.</h1>"
+    });
+
+    const result = await debugAutoSourceByIp({
+      pageUrl: "https://iptv.cqshushu.com/index.php?q=test",
+      keywords: [],
+      startPage: 1,
+      maxPages: 1,
+      rateLimitRetries: 0
+    }, "171.98.232.148", {
+      fetchImpl: fetchMock,
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(result.pages).toEqual([
+      expect.objectContaining({
+        page: 1,
+        rows: 0,
+        error: "VPS 被源站拒绝访问：HTTP 403 Access denied"
+      })
+    ]);
   });
 });

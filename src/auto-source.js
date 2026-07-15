@@ -77,6 +77,7 @@ function normalizeAutoSourceConfig(value = {}) {
     detailRetries: parseBoundedInteger(value.detailRetries ?? "1", 1, 0, 3),
     detailRetryDelayMs: parseBoundedInteger(value.detailRetryDelayMs ?? "5000", 5000, 0, 30000),
     requestTimeoutMs: parseBoundedInteger(value.requestTimeoutMs ?? "15000", 15000, 1, 120000),
+    browserProfile: value.browserProfile !== false,
     resolveDetailUrls: value.resolveDetailUrls !== false,
     validateM3uUrls: value.validateM3uUrls !== false
   };
@@ -292,6 +293,23 @@ function formatFetchError(error, config) {
   return error?.message || String(error);
 }
 
+async function describeBadResponse(response) {
+  if (response.status !== 403) {
+    return `HTTP ${response.status}`;
+  }
+
+  try {
+    const text = await response.text();
+    if (/access\s+denied/i.test(text)) {
+      return "VPS 被源站拒绝访问：HTTP 403 Access denied";
+    }
+  } catch (_error) {
+    // Fall through to the generic status below.
+  }
+
+  return "HTTP 403";
+}
+
 async function fetchWithTimeout(fetchImpl, url, options, timeoutMs) {
   if (!timeoutMs || typeof AbortController === "undefined") {
     return fetchImpl(url, options);
@@ -306,17 +324,39 @@ async function fetchWithTimeout(fetchImpl, url, options, timeoutMs) {
   }
 }
 
+function buildBrowserHeaders(config, cookieHeader = "") {
+  const headers = {
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 IPTV-M3U-Manager/1.0",
+    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "referer": config.pageUrl,
+    ...(cookieHeader ? { cookie: cookieHeader } : {})
+  };
+
+  if (config.browserProfile) {
+    return {
+      ...headers,
+      "cache-control": "no-cache",
+      "pragma": "no-cache",
+      "upgrade-insecure-requests": "1",
+      "sec-ch-ua": "\"Chromium\";v=\"126\", \"Google Chrome\";v=\"126\", \"Not-A.Brand\";v=\"99\"",
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": "\"Windows\"",
+      "sec-fetch-dest": "document",
+      "sec-fetch-mode": "navigate",
+      "sec-fetch-site": "none",
+      "sec-fetch-user": "?1"
+    };
+  }
+
+  return headers;
+}
+
 async function fetchDiscoveryPage(fetchImpl, url, config) {
   const cookieHeader = config.cookieJar?.header();
   return fetchWithTimeout(fetchImpl, url, {
     redirect: "manual",
-    headers: {
-      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 IPTV-M3U-Manager/1.0",
-      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "accept-language": "zh-CN,zh;q=0.9",
-      "referer": config.pageUrl,
-      ...(cookieHeader ? { cookie: cookieHeader } : {})
-    }
+    headers: buildBrowserHeaders(config, cookieHeader)
   }, config.requestTimeoutMs);
 }
 
@@ -558,8 +598,9 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
       warnings.push("目标搜索页被安全验证拦截，已改用首页兜底采集。");
     }
     if (!response.ok) {
-      pages.push({ page, url: effectiveUrl, rows: 0, error: `HTTP ${response.status}` });
-      warnings.push(`第 ${page} 页采集失败：HTTP ${response.status}`);
+      const error = await describeBadResponse(response);
+      pages.push({ page, url: effectiveUrl, rows: 0, error });
+      warnings.push(`第 ${page} 页采集失败：${error}`);
       break;
     }
 
@@ -667,7 +708,7 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
       break;
     }
     if (!response.ok) {
-      pages.push({ page, url, rows: 0, error: `HTTP ${response.status}` });
+      pages.push({ page, url, rows: 0, error: await describeBadResponse(response) });
       break;
     }
     const html = await response.text();
