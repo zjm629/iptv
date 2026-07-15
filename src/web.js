@@ -985,13 +985,13 @@ export function renderCollectorPage() {
         uniqueByType: false,
         resolveDetailUrls: true,
         pageDelayMs: 8000,
-        rateLimitDelayMs: 15000,
+        rateLimitDelayMs: 45000,
         rateLimitRetries: 1,
         detailDelayMs: 3000,
-        detailRetryDelayMs: 8000,
-        detailRetries: 1,
+        detailRetryDelayMs: 10000,
+        detailRetries: 2,
         m3uCheckRetries: 2,
-        m3uCheckRetryDelayMs: 5000,
+        m3uCheckRetryDelayMs: 10000,
         requestTimeoutMs: 15000
       };
     }

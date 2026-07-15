@@ -72,7 +72,7 @@ function normalizeAutoSourceConfig(value = {}) {
     maxPages: parseBoundedInteger(value.maxPages ?? "20", 20, 1, 20),
     pageDelayMs: parseBoundedInteger(value.pageDelayMs ?? "1500", 1500, 0, 5000),
     rateLimitRetries: parseBoundedInteger(value.rateLimitRetries ?? "2", 2, 0, 5),
-    rateLimitDelayMs: parseBoundedInteger(value.rateLimitDelayMs ?? "5000", 5000, 0, 30000),
+    rateLimitDelayMs: parseBoundedInteger(value.rateLimitDelayMs ?? "5000", 5000, 0, 300000),
     detailDelayMs: parseBoundedInteger(value.detailDelayMs ?? "1200", 1200, 0, 10000),
     detailRetries: parseBoundedInteger(value.detailRetries ?? "1", 1, 0, 3),
     detailRetryDelayMs: parseBoundedInteger(value.detailRetryDelayMs ?? "5000", 5000, 0, 30000),
@@ -456,6 +456,14 @@ function isTransientDiscoveryStatus(status) {
   return [429, 502, 503, 504].includes(status);
 }
 
+function retryDelayForStatus(status, normalDelayMs, rateLimitDelayMs, attempt) {
+  const normalDelay = normalDelayMs * attempt;
+  if (status === 429 && rateLimitDelayMs > 0) {
+    return Math.max(normalDelay, rateLimitDelayMs * attempt);
+  }
+  return normalDelay;
+}
+
 async function fetchWithSession(fetchImpl, url, requestConfig) {
   let response = await fetchDiscoveryPage(fetchImpl, url, requestConfig);
   requestConfig.cookieJar.store(response.headers);
@@ -517,18 +525,23 @@ function createProgressReporter(callback) {
 
 async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, report = () => {}) {
   const detailUrl = buildDetailUrl(requestConfig.pageUrl, row);
+  let previousStatus = 0;
   for (let attempt = 0; attempt <= requestConfig.detailRetries; attempt += 1) {
     throwIfAborted(requestConfig.abortSignal);
-    if (attempt > 0 && requestConfig.detailRetryDelayMs > 0) {
+    const retryDelayMs = attempt > 0
+      ? retryDelayForStatus(previousStatus, requestConfig.detailRetryDelayMs, requestConfig.rateLimitDelayMs, attempt)
+      : 0;
+    if (retryDelayMs > 0) {
       report({
         phase: "source:detail-wait",
         ip: row.ip,
         typeName: row.typeName,
         attempt: attempt + 1,
-        delayMs: requestConfig.detailRetryDelayMs * attempt,
+        status: previousStatus || undefined,
+        delayMs: retryDelayMs,
         message: `等待后重试详情页：${row.ip}`
       });
-      await sleepWithCancel(sleepImpl, requestConfig.detailRetryDelayMs * attempt, requestConfig.abortSignal);
+      await sleepWithCancel(sleepImpl, retryDelayMs, requestConfig.abortSignal);
     }
     let detail;
     try {
@@ -554,6 +567,7 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
       });
       continue;
     }
+    previousStatus = detail.response.status;
     const channelListUrl = detail.response.ok ? parseDetailChannelListUrl(detail.html, requestConfig.pageUrl) : "";
     if (!channelListUrl) {
       report({
@@ -593,6 +607,7 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
       });
       continue;
     }
+    previousStatus = channelList.response.status;
     const expectedToken = readSourceToken(requestConfig.pageUrl, channelListUrl);
     const m3uUrl = channelList.response.ok ? parseChannelListM3uUrl(channelList.html, requestConfig.pageUrl, expectedToken) : "";
     if (m3uUrl) {
@@ -653,17 +668,21 @@ async function checkM3uUrlWithRetries(fetchImpl, url, referer, requestConfig, sl
   let lastCheck = null;
   for (let attempt = 0; attempt <= requestConfig.m3uCheckRetries; attempt += 1) {
     throwIfAborted(requestConfig.abortSignal);
-    if (attempt > 0 && requestConfig.m3uCheckRetryDelayMs > 0) {
+    const retryDelayMs = attempt > 0
+      ? retryDelayForStatus(lastCheck?.status || 0, requestConfig.m3uCheckRetryDelayMs, requestConfig.rateLimitDelayMs, attempt)
+      : 0;
+    if (retryDelayMs > 0) {
       report({
         phase: "source:m3u-wait",
         ip: row.ip,
         typeName: row.typeName,
         attempt: attempt + 1,
-        delayMs: requestConfig.m3uCheckRetryDelayMs * attempt,
+        status: lastCheck?.status,
+        delayMs: retryDelayMs,
         m3uUrl: url,
         message: `M3U 为空，等待后重试：${row.ip}`
       });
-      await sleepWithCancel(sleepImpl, requestConfig.m3uCheckRetryDelayMs * attempt, requestConfig.abortSignal);
+      await sleepWithCancel(sleepImpl, retryDelayMs, requestConfig.abortSignal);
     }
     report({
       phase: "source:m3u-check",

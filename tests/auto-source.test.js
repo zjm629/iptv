@@ -689,6 +689,86 @@ describe("auto source discovery", () => {
     expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=retry-real-sichuan&t=multicast&channels=1&format=m3u");
   });
 
+  test("uses the longer rate-limit delay when a detail page returns 429", async () => {
+    const waits = [];
+    let detailRequests = 0;
+    const tableHtml = `
+      <table><tbody>
+      <tr>
+        <td><a onclick="gotoIP('top-sichuan','multicast')">1.1.1.1</a></td>
+        <td>200</td><td>Sichuan Telecom</td>
+        <td>2026-07-13 06:30</td><td>2026-07-13 17:00:00</td>
+        <td><span>OK</span></td>
+      </tr>
+      </tbody></table>
+    `;
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("?p=top-sichuan&t=multicast")) {
+        detailRequests += 1;
+        if (detailRequests === 1) {
+          return {
+            ok: false,
+            status: 429,
+            headers: { get: () => null },
+            text: async () => "rate limited"
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => '<a href="?s=after-rate-limit&t=multicast" class="btn btn-play">channel list</a>'
+        };
+      }
+      if (url.includes("?s=after-rate-limit&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => `
+            <a href="#"
+               onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=after-rate-limit&t=multicast&channels=1&format=m3u'); return false;"
+               title="M3U interface">M3U interface</a>
+          `
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => tableHtml
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      maxPages: 1,
+      todayOnly: false,
+      onlyStatus: "OK",
+      detailRetries: 1,
+      detailRetryDelayMs: 111,
+      rateLimitDelayMs: 999,
+      validateM3uUrls: false
+    }, {
+      fetchImpl: fetchMock,
+      sleepImpl: async (ms) => waits.push(ms),
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(waits).toEqual([999]);
+    expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=after-rate-limit&t=multicast&channels=1&format=m3u");
+  });
+
   test("deduplicates sources that resolve to the same real m3u url", async () => {
     const fetchMock = async (url) => {
       if (url.endsWith("/ad_verify.php")) {
@@ -921,6 +1001,97 @@ describe("auto source discovery", () => {
         ip: "171.193.240.67",
         reason: "m3u-empty",
         m3uUrl: "http://iptv.cqshushu.com/index.php?s=empty-token&t=multicast&channels=1&format=m3u"
+      })
+    ]);
+  });
+
+  test("uses the longer rate-limit delay when m3u validation returns 429", async () => {
+    const waits = [];
+    let m3uRequests = 0;
+    const tableHtml = `
+      <table><tbody>
+      <tr>
+        <td><a onclick="gotoIP('listing-token','multicast')">171.193.240.67</a></td>
+        <td>376</td><td>Sichuan Telecom</td>
+        <td>2026-07-13 06:30</td><td>2026-07-13 17:00:00</td>
+        <td><span>OK</span></td>
+      </tr>
+      </tbody></table>
+    `;
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("?p=listing-token&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => '<a href="?s=real-token&t=multicast" class="btn btn-play">open</a>'
+        };
+      }
+      if (url.includes("?s=real-token&t=multicast") && !url.includes("format=m3u")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => `
+            <a href="#" onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=real-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;" class="btn btn-play" title="copy M3U interface">M3U interface</a>
+          `
+        };
+      }
+      if (url.includes("format=m3u")) {
+        m3uRequests += 1;
+        if (m3uRequests === 1) {
+          return {
+            ok: false,
+            status: 429,
+            headers: { get: () => null },
+            text: async () => "rate limited"
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "#EXTM3U\n#EXTINF:-1,CCTV1\nhttp://example.com/live.ts\n"
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => tableHtml
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      maxPages: 1,
+      todayOnly: false,
+      onlyStatus: "OK",
+      detailRetries: 0,
+      m3uCheckRetries: 1,
+      m3uCheckRetryDelayMs: 111,
+      rateLimitDelayMs: 999
+    }, {
+      fetchImpl: fetchMock,
+      sleepImpl: async (ms) => waits.push(ms),
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(waits).toEqual([999]);
+    expect(result.sources).toEqual([
+      expect.objectContaining({
+        ip: "171.193.240.67",
+        url: "http://iptv.cqshushu.com/index.php?s=real-token&t=multicast&channels=1&format=m3u"
       })
     ]);
   });
