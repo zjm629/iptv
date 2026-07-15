@@ -767,6 +767,70 @@ describe("auto source discovery", () => {
     expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=official-token&t=multicast&channels=1&format=m3u");
   });
 
+  test("derives the m3u url from the actual channel-list url when the page contains a decoy token", async () => {
+    const tableHtml = `
+      <table><tbody>
+      <tr>
+        <td><a onclick="gotoIP('click-token','multicast')">1.1.1.1</a></td>
+        <td>200</td><td>Sichuan Telecom</td>
+        <td>2026-07-13 06:30</td><td>2026-07-13 17:00:00</td>
+        <td><span>OK</span></td>
+      </tr>
+      </tbody></table>
+    `;
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("?p=click-token&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => '<a href="?s=decoy-token&t=multicast">查看频道列表</a>'
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => tableHtml
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      maxPages: 1,
+      todayOnly: false,
+      onlyStatus: "OK",
+      browserFetch: true,
+      detailRetries: 0,
+      validateM3uUrls: false
+    }, {
+      fetchImpl: fetchMock,
+      browserClickHtmlImpl: async () => ({
+        html: '<a href="?s=decoy-token&t=multicast">查看频道列表</a>',
+        finalUrl: "https://iptv.cqshushu.com/index.php?s=official-token&t=multicast",
+        channelListHtml: `
+          <a href="#"
+             onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=decoy-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;"
+             title="M3U interface">M3U interface</a>
+        `,
+        channelListFinalUrl: "https://iptv.cqshushu.com/index.php?s=official-token&t=multicast"
+      }),
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=official-token&t=multicast&channels=1&format=m3u");
+  });
+
   test("does not fall back to decoy fetch detail pages when browser rendering fails", async () => {
     const fetchUrls = [];
     const tableHtml = `

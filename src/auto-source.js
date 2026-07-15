@@ -197,6 +197,18 @@ function normalizeM3uUrl(pageUrl, value) {
   return url.toString();
 }
 
+function normalizeM3uUrlFromChannelList(pageUrl, value) {
+  const urlValue = normalizeM3uUrl(pageUrl, value);
+  if (!urlValue) {
+    return "";
+  }
+  const url = new URL(urlValue);
+  if (url.hostname === "iptv.cqshushu.com") {
+    url.protocol = "http:";
+  }
+  return url.toString();
+}
+
 function normalizeCompleteM3uUrl(pageUrl, value) {
   if (!value) {
     return "";
@@ -629,12 +641,7 @@ async function fetchHtmlWithBrowser(url, requestConfig, browserReferrer = "") {
     };
   }
 
-  const candidates = [
-    process.env.CHROMIUM_PATH,
-    "chromium-browser",
-    "chromium",
-    "google-chrome"
-  ].filter(Boolean);
+  const candidates = chromiumCandidates();
 
   const errors = [];
   for (const command of candidates) {
@@ -665,7 +672,16 @@ async function fetchHtmlWithBrowser(url, requestConfig, browserReferrer = "") {
 }
 
 function cdpCommandTimeoutMs(requestConfig) {
-  return Math.max(500, Math.min(10000, requestConfig.browserTimeoutMs || 10000));
+  return Math.max(500, Math.min(60000, requestConfig.browserTimeoutMs || 25000));
+}
+
+function chromiumCandidates() {
+  return Array.from(new Set([
+    process.env.CHROMIUM_PATH,
+    "chromium-browser",
+    "chromium",
+    "google-chrome"
+  ].filter(Boolean)));
 }
 
 function withTimeout(promise, timeoutMs, message) {
@@ -711,12 +727,7 @@ async function fetchDetailHtmlByClick(row, detailUrl, requestConfig, report = ()
     };
   }
 
-  const candidates = [
-    process.env.CHROMIUM_PATH,
-    "chromium-browser",
-    "chromium",
-    "google-chrome"
-  ].filter(Boolean);
+  const candidates = chromiumCandidates();
 
   const errors = [];
   for (const command of candidates) {
@@ -1352,7 +1363,8 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
     previousStatus = channelList.response.status;
     const actualChannelListUrl = channelList.actualUrl || channelListUrl;
     const expectedToken = readSourceToken(requestConfig.pageUrl, actualChannelListUrl);
-    const m3uUrl = channelList.response.ok ? parseChannelListM3uUrl(channelList.html, requestConfig.pageUrl, expectedToken) : "";
+    const parsedM3uUrl = channelList.response.ok ? parseChannelListM3uUrl(channelList.html, requestConfig.pageUrl, expectedToken) : "";
+    const m3uUrl = parsedM3uUrl || normalizeM3uUrlFromChannelList(requestConfig.pageUrl, actualChannelListUrl);
     if (m3uUrl) {
       report({
         phase: "source:m3u-url",
@@ -1971,7 +1983,8 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
   }
   const actualChannelListUrl = chooseActualChannelListUrl(config.pageUrl, channelListUrl, channelList.finalUrl);
   const expectedToken = readSourceToken(config.pageUrl, actualChannelListUrl);
-  const selectedM3uUrl = channelList.response.ok ? parseChannelListM3uUrl(channelList.html, config.pageUrl, expectedToken) : "";
+  const parsedM3uUrl = channelList.response.ok ? parseChannelListM3uUrl(channelList.html, config.pageUrl, expectedToken) : "";
+  const selectedM3uUrl = parsedM3uUrl || normalizeM3uUrlFromChannelList(config.pageUrl, actualChannelListUrl);
   result.channelList = {
     url: actualChannelListUrl,
     status: channelList.response.status,
