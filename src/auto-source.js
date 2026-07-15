@@ -989,6 +989,7 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
         const skipped = {
           ...row,
           reason: "m3u-empty",
+          detailUrl: buildDetailUrl(config.pageUrl, row),
           m3uUrl: sourceUrl,
           channelListUrl,
           status: m3uCheck.status,
@@ -999,6 +1000,7 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
           message: "M3U 地址未返回频道"
         };
         skippedSources.push(skipped);
+        skipped.message = `M3U 地址未返回频道；详情页：${skipped.detailUrl}；频道列表：${channelListUrl || "未取到"}`;
         report({
           phase: "source:skip",
           ip: row.ip,
