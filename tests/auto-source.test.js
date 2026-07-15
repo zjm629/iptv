@@ -719,6 +719,64 @@ describe("auto source discovery", () => {
     expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=correct-channel-token&t=multicast&channels=1&format=m3u");
   });
 
+  test("times out stalled browser click detail rendering instead of hanging", async () => {
+    const tableHtml = `
+      <table><tbody>
+      <tr>
+        <td><a onclick="gotoIP('slow-token','multicast')">1.1.1.1</a></td>
+        <td>200</td><td>Sichuan Telecom</td>
+        <td>2026-07-13 06:30</td><td>2026-07-13 17:00:00</td>
+        <td><span>OK</span></td>
+      </tr>
+      </tbody></table>
+    `;
+    const progress = [];
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => tableHtml
+      };
+    };
+
+    const result = await Promise.race([
+      discoverAutoSources({
+        enabled: true,
+        pageUrl: "https://iptv.cqshushu.com/index.php",
+        keywords: [],
+        maxPages: 1,
+        todayOnly: false,
+        onlyStatus: "OK",
+        browserFetch: true,
+        browserTimeoutMs: 1000,
+        detailRetries: 0,
+        validateM3uUrls: false
+      }, {
+        fetchImpl: fetchMock,
+        browserClickHtmlImpl: async () => new Promise(() => {}),
+        onProgress: (event) => progress.push(event),
+        now: new Date("2026-07-13T12:00:00+08:00")
+      }),
+      new Promise((resolve) => setTimeout(() => resolve("outer-timeout"), 1500))
+    ]);
+
+    expect(result).not.toBe("outer-timeout");
+    expect(result.sources).toEqual([]);
+    expect(progress.some((event) =>
+      event.phase === "source:detail-error" &&
+      String(event.error || "").includes("timed out")
+    )).toBe(true);
+  });
+
   test("skips sources when the detail page does not expose a real m3u token", async () => {
     const fetchMock = async (url) => {
       if (url.endsWith("/ad_verify.php")) {

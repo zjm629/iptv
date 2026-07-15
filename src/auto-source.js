@@ -606,14 +606,41 @@ async function fetchHtmlWithBrowser(url, requestConfig, browserReferrer = "") {
   };
 }
 
-async function fetchDetailHtmlByClick(row, detailUrl, requestConfig) {
+function cdpCommandTimeoutMs(requestConfig) {
+  return Math.max(500, Math.min(10000, requestConfig.browserTimeoutMs || 10000));
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  let timer;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    })
+  ]);
+}
+
+async function fetchDetailHtmlByClick(row, detailUrl, requestConfig, report = () => {}) {
   const startUrl = row.discoveryPageUrl || requestConfig.pageUrl;
   if (!requestConfig.browserFetch || !startUrl) {
     return null;
   }
 
+  report({
+    phase: "source:detail-click-start",
+    ip: row.ip,
+    typeName: row.typeName,
+    startUrl,
+    detailUrl,
+    message: `从列表页点击源：${row.ip}`
+  });
+
   if (typeof requestConfig.browserClickHtmlImpl === "function") {
-    const html = await requestConfig.browserClickHtmlImpl({ startUrl, detailUrl, row, requestConfig });
+    const html = await withTimeout(
+      requestConfig.browserClickHtmlImpl({ startUrl, detailUrl, row, requestConfig }),
+      requestConfig.browserTimeoutMs,
+      `Browser click rendering timed out for ${row.ip}`
+    );
     return {
       response: { ok: true, status: 200 },
       html,
@@ -633,7 +660,7 @@ async function fetchDetailHtmlByClick(row, detailUrl, requestConfig) {
   const errors = [];
   for (const command of candidates) {
     try {
-      const rendered = await renderHtmlWithChromiumClick(command, startUrl, row, requestConfig);
+      const rendered = await renderHtmlWithChromiumClick(command, startUrl, row, requestConfig, report);
       if (!rendered.html.trim()) {
         errors.push(`${command}: empty clicked html`);
         continue;
@@ -678,13 +705,19 @@ function waitForProcessOutput(process, pattern, timeoutMs) {
       cleanup();
       reject(new Error(`Chromium exited before DevTools was ready: ${code}. ${output.slice(-400)}`));
     };
+    const onError = (error) => {
+      cleanup();
+      reject(error);
+    };
     const cleanup = () => {
       clearTimeout(timer);
       process.stderr.off("data", onData);
       process.off("exit", onExit);
+      process.off("error", onError);
     };
     process.stderr.on("data", onData);
     process.once("exit", onExit);
+    process.once("error", onError);
   });
 }
 
@@ -704,25 +737,39 @@ function createCdpClient(wsUrl) {
     if (!message.id || !pending.has(message.id)) {
       return;
     }
-    const { resolve, reject } = pending.get(message.id);
+    const { resolve, reject, timer } = pending.get(message.id);
     pending.delete(message.id);
+    clearTimeout(timer);
     if (message.error) {
       reject(new Error(message.error.message || JSON.stringify(message.error)));
     } else {
       resolve(message.result || {});
     }
   });
+  const rejectPending = (error) => {
+    for (const [id, item] of pending.entries()) {
+      pending.delete(id);
+      clearTimeout(item.timer);
+      item.reject(error);
+    }
+  };
+  ws.addEventListener("error", () => rejectPending(new Error("Chromium DevTools WebSocket failed")));
+  ws.addEventListener("close", () => rejectPending(new Error("Chromium DevTools WebSocket closed")));
 
   return {
-    async send(method, params = {}, sessionId = "") {
-      await openPromise;
+    async send(method, params = {}, sessionId = "", timeoutMs = 10000) {
+      await withTimeout(openPromise, timeoutMs, `CDP WebSocket open timed out before ${method}`);
       const id = nextId++;
       const payload = { id, method, params };
       if (sessionId) {
         payload.sessionId = sessionId;
       }
       const response = new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject });
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          reject(new Error(`CDP command timed out: ${method}`));
+        }, timeoutMs);
+        pending.set(id, { resolve, reject, timer });
       });
       ws.send(JSON.stringify(payload));
       return response;
@@ -787,18 +834,19 @@ async function renderHtmlWithChromium(command, url, requestConfig, browserReferr
   const chrome = spawn(command, args, { stdio: ["ignore", "ignore", "pipe"] });
   let client;
   try {
-    const wsUrl = await waitForProcessOutput(chrome, /DevTools listening on (ws:\/\/[^\s]+)/, Math.min(10000, requestConfig.browserTimeoutMs));
+    const commandTimeoutMs = cdpCommandTimeoutMs(requestConfig);
+    const wsUrl = await waitForProcessOutput(chrome, /DevTools listening on (ws:\/\/[^\s]+)/, commandTimeoutMs);
     client = createCdpClient(wsUrl);
-    const { targetId } = await client.send("Target.createTarget", { url: "about:blank" });
-    const { sessionId } = await client.send("Target.attachToTarget", { targetId, flatten: true });
-    await client.send("Page.enable", {}, sessionId);
-    await client.send("Runtime.enable", {}, sessionId);
-    await client.send("Page.addScriptToEvaluateOnNewDocument", { source: STEALTH_SCRIPT }, sessionId);
+    const { targetId } = await client.send("Target.createTarget", { url: "about:blank" }, "", commandTimeoutMs);
+    const { sessionId } = await client.send("Target.attachToTarget", { targetId, flatten: true }, "", commandTimeoutMs);
+    await client.send("Page.enable", {}, sessionId, commandTimeoutMs);
+    await client.send("Runtime.enable", {}, sessionId, commandTimeoutMs);
+    await client.send("Page.addScriptToEvaluateOnNewDocument", { source: STEALTH_SCRIPT }, sessionId, commandTimeoutMs);
     const navigateParams = { url };
     if (browserReferrer) {
       navigateParams.referrer = browserReferrer;
     }
-    await client.send("Page.navigate", navigateParams, sessionId);
+    await client.send("Page.navigate", navigateParams, sessionId, commandTimeoutMs);
 
     const deadline = Date.now() + requestConfig.browserTimeoutMs;
     let lastHtml = "";
@@ -808,7 +856,7 @@ async function renderHtmlWithChromium(command, url, requestConfig, browserReferr
       const evaluated = await client.send("Runtime.evaluate", {
         expression: "({ html: document.documentElement ? document.documentElement.outerHTML : '', text: document.body ? document.body.innerText : '', href: location.href, readyState: document.readyState })",
         returnByValue: true
-      }, sessionId);
+      }, sessionId, commandTimeoutMs);
       const value = evaluated?.result?.value || {};
       lastHtml = value.html || lastHtml;
       lastFinalUrl = value.href || lastFinalUrl;
@@ -827,7 +875,7 @@ async function renderHtmlWithChromium(command, url, requestConfig, browserReferr
   }
 }
 
-async function renderHtmlWithChromiumClick(command, startUrl, row, requestConfig) {
+async function renderHtmlWithChromiumClick(command, startUrl, row, requestConfig, report = () => {}) {
   const args = [
     "--headless=new",
     "--no-sandbox",
@@ -843,15 +891,23 @@ async function renderHtmlWithChromiumClick(command, startUrl, row, requestConfig
   const chrome = spawn(command, args, { stdio: ["ignore", "ignore", "pipe"] });
   let client;
   try {
-    const wsUrl = await waitForProcessOutput(chrome, /DevTools listening on (ws:\/\/[^\s]+)/, Math.min(10000, requestConfig.browserTimeoutMs));
+    const commandTimeoutMs = cdpCommandTimeoutMs(requestConfig);
+    const wsUrl = await waitForProcessOutput(chrome, /DevTools listening on (ws:\/\/[^\s]+)/, commandTimeoutMs);
     client = createCdpClient(wsUrl);
-    const { targetId } = await client.send("Target.createTarget", { url: "about:blank" });
-    const { sessionId } = await client.send("Target.attachToTarget", { targetId, flatten: true });
-    await client.send("Page.enable", {}, sessionId);
-    await client.send("Runtime.enable", {}, sessionId);
-    await client.send("Page.addScriptToEvaluateOnNewDocument", { source: STEALTH_SCRIPT }, sessionId);
-    await client.send("Page.navigate", { url: startUrl }, sessionId);
+    const { targetId } = await client.send("Target.createTarget", { url: "about:blank" }, "", commandTimeoutMs);
+    const { sessionId } = await client.send("Target.attachToTarget", { targetId, flatten: true }, "", commandTimeoutMs);
+    await client.send("Page.enable", {}, sessionId, commandTimeoutMs);
+    await client.send("Runtime.enable", {}, sessionId, commandTimeoutMs);
+    await client.send("Page.addScriptToEvaluateOnNewDocument", { source: STEALTH_SCRIPT }, sessionId, commandTimeoutMs);
+    await client.send("Page.navigate", { url: startUrl }, sessionId, commandTimeoutMs);
     await waitForStablePage(client, sessionId, requestConfig, startUrl);
+    report({
+      phase: "source:detail-click-list-loaded",
+      ip: row.ip,
+      typeName: row.typeName,
+      startUrl,
+      message: `列表页已打开，准备点击：${row.ip}`
+    });
 
     const clickResult = await client.send("Runtime.evaluate", {
       expression: `(() => {
@@ -873,11 +929,21 @@ async function renderHtmlWithChromiumClick(command, startUrl, row, requestConfig
         return { clicked: true, href: location.href, text: link.textContent || "", onclick: link.getAttribute("onclick") || "" };
       })()`,
       returnByValue: true
-    }, sessionId);
+    }, sessionId, commandTimeoutMs);
     const clicked = clickResult?.result?.value;
     if (!clicked?.clicked) {
       throw new Error(`Could not find source IP link on list page: ${JSON.stringify(clicked || {})}`);
     }
+    report({
+      phase: "source:detail-clicked",
+      ip: row.ip,
+      typeName: row.typeName,
+      startUrl,
+      clickedHref: clicked.href,
+      clickedText: clicked.text,
+      clickedOnclick: clicked.onclick,
+      message: `已点击列表源：${row.ip}`
+    });
     return waitForStablePage(client, sessionId, requestConfig, startUrl, { requireUrlChange: true });
   } finally {
     client?.close();
@@ -889,6 +955,7 @@ async function renderHtmlWithChromiumClick(command, startUrl, row, requestConfig
 
 async function waitForStablePage(client, sessionId, requestConfig, fallbackUrl = "", options = {}) {
   const deadline = Date.now() + requestConfig.browserTimeoutMs;
+  const commandTimeoutMs = cdpCommandTimeoutMs(requestConfig);
   let lastHtml = "";
   let lastFinalUrl = fallbackUrl;
   while (Date.now() < deadline) {
@@ -896,7 +963,7 @@ async function waitForStablePage(client, sessionId, requestConfig, fallbackUrl =
     const evaluated = await client.send("Runtime.evaluate", {
       expression: "({ html: document.documentElement ? document.documentElement.outerHTML : '', text: document.body ? document.body.innerText : '', href: location.href, readyState: document.readyState })",
       returnByValue: true
-    }, sessionId);
+    }, sessionId, Math.min(commandTimeoutMs, Math.max(500, deadline - Date.now())));
     const value = evaluated?.result?.value || {};
     lastHtml = value.html || lastHtml;
     lastFinalUrl = value.href || lastFinalUrl;
@@ -908,6 +975,9 @@ async function waitForStablePage(client, sessionId, requestConfig, fallbackUrl =
     if (lastHtml && value.readyState === "complete" && !stillChecking) {
       return { html: lastHtml, finalUrl: lastFinalUrl };
     }
+  }
+  if (options.requireUrlChange && lastFinalUrl === fallbackUrl) {
+    throw new Error(`Clicked source link but URL did not change from list page: ${fallbackUrl}`);
   }
   return { html: lastHtml, finalUrl: lastFinalUrl };
 }
@@ -967,7 +1037,7 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
       const shouldClickFromList = requestConfig.browserFetch && row.discoveryPageUrl &&
         (typeof requestConfig.browserClickHtmlImpl === "function" || !requestConfig.browserHtmlImpl);
       if (shouldClickFromList) {
-        const clickedDetail = await fetchDetailHtmlByClick(row, detailUrl, requestConfig);
+        const clickedDetail = await fetchDetailHtmlByClick(row, detailUrl, requestConfig, report);
         if (clickedDetail?.html !== undefined) {
           detail = clickedDetail;
         } else {
