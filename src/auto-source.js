@@ -300,6 +300,36 @@ function summarizeTokenAnchors(html = "", pageUrl = "https://iptv.cqshushu.com/i
   return anchors;
 }
 
+function summarizeHtmlPage(html = "") {
+  const source = String(html || "");
+  const title = stripTags(decodeHtmlEntities((source.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || "")).trim();
+  const bodyHtml = (source.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i) || [])[1] || source;
+  const text = stripTags(decodeHtmlEntities(bodyHtml)).replace(/\s+/g, " ").trim();
+  const anchors = [];
+  const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  for (const match of source.matchAll(anchorPattern)) {
+    if (anchors.length >= 8) {
+      break;
+    }
+    anchors.push({
+      text: stripTags(decodeHtmlEntities(match[2])).replace(/\s+/g, " ").trim().slice(0, 80),
+      href: readAttribute(match[1], "href").slice(0, 180),
+      onclick: readAttribute(match[1], "onclick").slice(0, 180),
+      title: readAttribute(match[1], "title").slice(0, 80)
+    });
+  }
+  return {
+    title,
+    text: text.slice(0, 240),
+    bytes: Buffer.byteLength(source),
+    hasSecurityChallenge: source.includes("安全验证") || source.includes("_js_challenge") || source.includes("paer.js"),
+    hasAccessDenied: source.includes("访问被拒绝") || /access\s+denied/i.test(source),
+    hasChannelListText: source.includes("查看频道列表") || source.includes("频道列表"),
+    anchorCount: (source.match(/<a\b/gi) || []).length,
+    anchors
+  };
+}
+
 function formatFetchError(error, config) {
   if (error?.name === "AbortError") {
     return `Request timed out after ${config.requestTimeoutMs} ms`;
@@ -761,6 +791,7 @@ function createProgressReporter(callback) {
 async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, report = () => {}) {
   const detailUrl = buildDetailUrl(requestConfig.pageUrl, row);
   let previousStatus = 0;
+  let lastDetailSummary = null;
   for (let attempt = 0; attempt <= requestConfig.detailRetries; attempt += 1) {
     throwIfAborted(requestConfig.abortSignal);
     const retryDelayMs = attempt > 0
@@ -814,6 +845,8 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
     previousStatus = detail.response.status;
     const channelListUrl = detail.response.ok ? parseDetailChannelListUrl(detail.html, requestConfig.pageUrl) : "";
     if (!channelListUrl) {
+      const detailSummary = summarizeHtmlPage(detail.html);
+      lastDetailSummary = detailSummary;
       report({
         phase: "source:detail-miss",
         ip: row.ip,
@@ -821,7 +854,15 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
         attempt: attempt + 1,
         detailUrl,
         status: detail.response.status,
-        message: `未找到频道列表：${row.ip}`
+        pageTitle: detailSummary.title,
+        pageText: detailSummary.text,
+        pageBytes: detailSummary.bytes,
+        hasSecurityChallenge: detailSummary.hasSecurityChallenge,
+        hasAccessDenied: detailSummary.hasAccessDenied,
+        hasChannelListText: detailSummary.hasChannelListText,
+        anchorCount: detailSummary.anchorCount,
+        anchors: detailSummary.anchors,
+        message: `未找到频道列表：${row.ip}；标题：${detailSummary.title || "无"}；正文：${detailSummary.text || "空"}`
       });
       continue;
     }
@@ -883,7 +924,7 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
       message: `未找到 M3U 接口：${row.ip}`
     });
   }
-  return { m3uUrl: "", channelListUrl: "" };
+  return { m3uUrl: "", channelListUrl: "", detailSummary: lastDetailSummary };
 }
 
 async function checkM3uUrl(fetchImpl, url, referer, requestConfig) {
@@ -1195,10 +1236,12 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
         resolvedFromDetail = true;
       } else {
         skippedWithoutDetailUrl += 1;
+        const detailSummary = detailResult.detailSummary || {};
         const skipped = {
           ...row,
           reason: "detail-missing",
           detailUrl: buildDetailUrl(config.pageUrl, row),
+          detailSummary,
           message: "未取到真实 M3U 接口"
         };
         skippedSources.push(skipped);

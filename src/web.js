@@ -1023,6 +1023,11 @@ export function renderCollectorPage(options = {}) {
         "<span>" + escapeHtml(event.time ? new Date(event.time).toLocaleTimeString() : "") + "</span>" +
         "<span>" + escapeHtml(event.message || event.phase || "") +
         (event.error ? "；" + escapeHtml(event.error) : "") +
+        (event.pageTitle ? "；标题 " + escapeHtml(event.pageTitle) : "") +
+        (event.hasSecurityChallenge ? "；安全验证页" : "") +
+        (event.hasAccessDenied ? "；访问被拒绝" : "") +
+        (event.pageBytes !== undefined ? "；页面字节 " + escapeHtml(event.pageBytes) : "") +
+        (event.anchorCount !== undefined ? "；链接 " + escapeHtml(event.anchorCount) : "") +
         (event.channelLines !== undefined ? "；频道 " + escapeHtml(event.channelLines) : "") +
         (event.bytes !== undefined ? "；字节 " + escapeHtml(event.bytes) : "") +
         "</span></div>"
@@ -1059,6 +1064,10 @@ export function renderCollectorPage(options = {}) {
           "<div class='skipped-row'>" +
           "<div><strong>" + escapeHtml(source.ip || "") + "</strong> " + escapeHtml(source.typeName || "") + "</div>" +
           "<div>原因：" + escapeHtml(source.message || source.reason || "") +
+          (source.detailSummary?.title ? "；标题：" + escapeHtml(source.detailSummary.title) : "") +
+          (source.detailSummary?.hasSecurityChallenge ? "；安全验证页" : "") +
+          (source.detailSummary?.hasAccessDenied ? "；访问被拒绝" : "") +
+          (source.detailSummary?.text ? "；正文：" + escapeHtml(source.detailSummary.text) : "") +
           (source.channelLines !== undefined ? "；频道数：" + escapeHtml(source.channelLines) : "") +
           (source.bytes !== undefined ? "；字节：" + escapeHtml(source.bytes) : "") +
           "</div>" +
