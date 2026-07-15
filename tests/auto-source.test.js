@@ -73,6 +73,7 @@ describe("auto source discovery", () => {
       pageDelayMs: 3000,
       rateLimitDelayMs: 30000,
       detailDelayMs: 3000,
+      detailInitialDelayMs: 8000,
       detailRetryDelayMs: 15000
     }));
   });

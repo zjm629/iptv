@@ -79,6 +79,7 @@ function normalizeAutoSourceConfig(value = {}) {
     rateLimitRetries: parseBoundedInteger(value.rateLimitRetries ?? "2", 2, 0, 5),
     rateLimitDelayMs: parseBoundedInteger(value.rateLimitDelayMs ?? "30000", 30000, 0, 300000),
     detailDelayMs: parseBoundedInteger(value.detailDelayMs ?? "3000", 3000, 0, 30000),
+    detailInitialDelayMs: parseBoundedInteger(value.detailInitialDelayMs ?? "8000", 8000, 0, 60000),
     detailRetries: parseBoundedInteger(value.detailRetries ?? "1", 1, 0, 3),
     detailRetryDelayMs: parseBoundedInteger(value.detailRetryDelayMs ?? "15000", 15000, 0, 60000),
     m3uCheckRetries: parseBoundedInteger(value.m3uCheckRetries ?? "2", 2, 0, 5),
@@ -983,6 +984,17 @@ async function renderHtmlWithChromiumClick(command, startUrl, row, requestConfig
       startUrl,
       message: `列表页已打开，准备点击：${row.ip}`
     });
+    if (requestConfig.detailInitialDelayMs > 0) {
+      report({
+        phase: "source:detail-click-wait",
+        ip: row.ip,
+        typeName: row.typeName,
+        startUrl,
+        delayMs: requestConfig.detailInitialDelayMs,
+        message: `首次点击前等待：${row.ip}`
+      });
+      await new Promise((resolve) => setTimeout(resolve, requestConfig.detailInitialDelayMs));
+    }
 
     const clickResult = await client.send("Runtime.evaluate", {
       expression: `(() => {
@@ -1035,10 +1047,18 @@ async function waitForStablePage(client, sessionId, requestConfig, fallbackUrl =
   let lastFinalUrl = fallbackUrl;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 600));
-    const evaluated = await client.send("Runtime.evaluate", {
-      expression: "({ html: document.documentElement ? document.documentElement.outerHTML : '', text: document.body ? document.body.innerText : '', href: location.href, readyState: document.readyState })",
-      returnByValue: true
-    }, sessionId, Math.min(commandTimeoutMs, Math.max(500, deadline - Date.now())));
+    let evaluated;
+    try {
+      evaluated = await client.send("Runtime.evaluate", {
+        expression: "({ html: document.documentElement ? document.documentElement.outerHTML : '', text: document.body ? document.body.innerText : '', href: location.href, readyState: document.readyState })",
+        returnByValue: true
+      }, sessionId, Math.min(commandTimeoutMs, Math.max(500, deadline - Date.now())));
+    } catch (error) {
+      if (String(error?.message || error).includes("CDP command timed out: Runtime.evaluate")) {
+        continue;
+      }
+      throw error;
+    }
     const value = evaluated?.result?.value || {};
     lastHtml = value.html || lastHtml;
     lastFinalUrl = value.href || lastFinalUrl;

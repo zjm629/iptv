@@ -836,7 +836,7 @@ export function renderCollectorPage(options = {}) {
     }
     .collector-grid {
       display: grid;
-      grid-template-columns: 1fr minmax(100px, 140px) minmax(100px, 140px);
+      grid-template-columns: 1fr minmax(100px, 140px) minmax(100px, 140px) minmax(130px, 170px);
       gap: 10px;
       margin-bottom: 10px;
     }
@@ -943,6 +943,7 @@ export function renderCollectorPage(options = {}) {
         <label class="collector-field">采集页面<input id="collector-page-url" value="https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1"></label>
         <label class="collector-field">起始页<input id="collector-start-page" type="number" min="1" max="200" step="1" value="1"></label>
         <label class="collector-field">采集页数<input id="collector-max-pages" type="number" min="1" max="20" step="1" value="2"></label>
+        <label class="collector-field">首次点击等待秒数<input id="collector-click-delay" type="number" min="0" max="60" step="1" value="8"></label>
       </div>
       <input id="collector-keywords" value="电信" placeholder="关键词，多个用逗号分隔">
       <div class="actions">
@@ -996,6 +997,7 @@ export function renderCollectorPage(options = {}) {
         rateLimitDelayMs: 45000,
         rateLimitRetries: 1,
         detailDelayMs: 3000,
+        detailInitialDelayMs: Number($("collector-click-delay").value || 8) * 1000,
         detailRetryDelayMs: 10000,
         detailRetries: 2,
         m3uCheckRetries: 2,
