@@ -76,6 +76,8 @@ function normalizeAutoSourceConfig(value = {}) {
     detailDelayMs: parseBoundedInteger(value.detailDelayMs ?? "1200", 1200, 0, 10000),
     detailRetries: parseBoundedInteger(value.detailRetries ?? "1", 1, 0, 3),
     detailRetryDelayMs: parseBoundedInteger(value.detailRetryDelayMs ?? "5000", 5000, 0, 30000),
+    m3uCheckRetries: parseBoundedInteger(value.m3uCheckRetries ?? "2", 2, 0, 5),
+    m3uCheckRetryDelayMs: parseBoundedInteger(value.m3uCheckRetryDelayMs ?? "5000", 5000, 0, 30000),
     requestTimeoutMs: parseBoundedInteger(value.requestTimeoutMs ?? "15000", 15000, 1, 120000),
     browserProfile: value.browserProfile !== false,
     resolveDetailUrls: value.resolveDetailUrls !== false,
@@ -459,36 +461,112 @@ async function ensureAdVerification(fetchImpl, pageUrl, requestConfig) {
   }
 }
 
-async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl) {
+function createProgressReporter(callback) {
+  return (event) => {
+    if (typeof callback === "function") {
+      callback({ time: new Date().toISOString(), ...event });
+    }
+  };
+}
+
+async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, report = () => {}) {
   const detailUrl = buildDetailUrl(requestConfig.pageUrl, row);
   for (let attempt = 0; attempt <= requestConfig.detailRetries; attempt += 1) {
     if (attempt > 0 && requestConfig.detailRetryDelayMs > 0) {
+      report({
+        phase: "source:detail-wait",
+        ip: row.ip,
+        typeName: row.typeName,
+        attempt: attempt + 1,
+        delayMs: requestConfig.detailRetryDelayMs * attempt,
+        message: `等待后重试详情页：${row.ip}`
+      });
       await sleepImpl(requestConfig.detailRetryDelayMs * attempt);
     }
     let detail;
     try {
+      report({
+        phase: "source:detail",
+        ip: row.ip,
+        typeName: row.typeName,
+        attempt: attempt + 1,
+        detailUrl,
+        message: `获取详情页：${row.ip}`
+      });
       detail = await fetchHtmlWithSession(fetchImpl, detailUrl, requestConfig);
-    } catch (_error) {
+    } catch (error) {
+      report({
+        phase: "source:detail-error",
+        ip: row.ip,
+        typeName: row.typeName,
+        attempt: attempt + 1,
+        detailUrl,
+        error: formatFetchError(error, requestConfig),
+        message: `详情页请求失败：${row.ip}`
+      });
       continue;
     }
     const channelListUrl = detail.response.ok ? parseDetailChannelListUrl(detail.html, requestConfig.pageUrl) : "";
     if (!channelListUrl) {
+      report({
+        phase: "source:detail-miss",
+        ip: row.ip,
+        typeName: row.typeName,
+        attempt: attempt + 1,
+        detailUrl,
+        status: detail.response.status,
+        message: `未找到频道列表：${row.ip}`
+      });
       continue;
     }
 
     let channelList;
     try {
+      report({
+        phase: "source:channel-list",
+        ip: row.ip,
+        typeName: row.typeName,
+        attempt: attempt + 1,
+        channelListUrl,
+        message: `分析频道列表：${row.ip}`
+      });
       channelList = await fetchHtmlWithSession(fetchImpl, channelListUrl, requestConfig);
-    } catch (_error) {
+    } catch (error) {
+      report({
+        phase: "source:channel-list-error",
+        ip: row.ip,
+        typeName: row.typeName,
+        attempt: attempt + 1,
+        channelListUrl,
+        error: formatFetchError(error, requestConfig),
+        message: `频道列表请求失败：${row.ip}`
+      });
       continue;
     }
     const expectedToken = readSourceToken(requestConfig.pageUrl, channelListUrl);
     const m3uUrl = channelList.response.ok ? parseChannelListM3uUrl(channelList.html, requestConfig.pageUrl, expectedToken) : "";
     if (m3uUrl) {
-      return m3uUrl;
+      report({
+        phase: "source:m3u-url",
+        ip: row.ip,
+        typeName: row.typeName,
+        channelListUrl,
+        m3uUrl,
+        message: `取到 M3U 接口：${row.ip}`
+      });
+      return { m3uUrl, channelListUrl };
     }
+    report({
+      phase: "source:m3u-miss",
+      ip: row.ip,
+      typeName: row.typeName,
+      attempt: attempt + 1,
+      channelListUrl,
+      status: channelList.response.status,
+      message: `未找到 M3U 接口：${row.ip}`
+    });
   }
-  return "";
+  return { m3uUrl: "", channelListUrl: "" };
 }
 
 async function checkM3uUrl(fetchImpl, url, referer, requestConfig) {
@@ -509,11 +587,56 @@ async function checkM3uUrl(fetchImpl, url, referer, requestConfig) {
     return {
       ok: true,
       status: response.status,
-      channelLines: (text.match(/#EXTINF/g) || []).length
+      channelLines: (text.match(/#EXTINF/g) || []).length,
+      bytes: text.length,
+      head: text.slice(0, 120)
     };
   } catch (error) {
     return { ok: false, error: formatFetchError(error, requestConfig), channelLines: 0 };
   }
+}
+
+async function checkM3uUrlWithRetries(fetchImpl, url, referer, requestConfig, sleepImpl, row, report = () => {}) {
+  let lastCheck = null;
+  for (let attempt = 0; attempt <= requestConfig.m3uCheckRetries; attempt += 1) {
+    if (attempt > 0 && requestConfig.m3uCheckRetryDelayMs > 0) {
+      report({
+        phase: "source:m3u-wait",
+        ip: row.ip,
+        typeName: row.typeName,
+        attempt: attempt + 1,
+        delayMs: requestConfig.m3uCheckRetryDelayMs * attempt,
+        m3uUrl: url,
+        message: `M3U 为空，等待后重试：${row.ip}`
+      });
+      await sleepImpl(requestConfig.m3uCheckRetryDelayMs * attempt);
+    }
+    report({
+      phase: "source:m3u-check",
+      ip: row.ip,
+      typeName: row.typeName,
+      attempt: attempt + 1,
+      m3uUrl: url,
+      message: `校验 M3U 内容：${row.ip}`
+    });
+    lastCheck = await checkM3uUrl(fetchImpl, url, referer, requestConfig);
+    report({
+      phase: "source:m3u-check-result",
+      ip: row.ip,
+      typeName: row.typeName,
+      attempt: attempt + 1,
+      m3uUrl: url,
+      status: lastCheck.status,
+      channelLines: lastCheck.channelLines,
+      bytes: lastCheck.bytes,
+      error: lastCheck.error,
+      message: `M3U 校验结果：${row.ip}，频道 ${lastCheck.channelLines || 0} 个`
+    });
+    if (lastCheck.ok && lastCheck.channelLines > 0) {
+      return lastCheck;
+    }
+  }
+  return lastCheck || { ok: false, channelLines: 0 };
 }
 
 function filterRows(rows, config, now = new Date()) {
@@ -552,6 +675,7 @@ function filterRows(rows, config, now = new Date()) {
 
 export async function discoverAutoSources(configValue = {}, options = {}) {
   const config = normalizeAutoSourceConfig(configValue);
+  const report = createProgressReporter(options.onProgress);
   if (!config.enabled) {
     return { config, sources: [], rows: [], pages: [] };
   }
@@ -567,8 +691,20 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
   const requestConfig = { ...config, cookieJar };
 
   const endPage = config.startPage + config.maxPages - 1;
+  report({
+    phase: "discover:start",
+    current: 0,
+    total: config.maxPages,
+    message: `开始采集：${config.pageUrl}`
+  });
   for (let page = config.startPage; page <= endPage; page += 1) {
     if (page > config.startPage && config.pageDelayMs > 0) {
+      report({
+        phase: "page:wait",
+        page,
+        delayMs: config.pageDelayMs,
+        message: `等待后采集第 ${page} 页`
+      });
       await sleepImpl(config.pageDelayMs);
     }
     const url = buildPageUrl(useFallbackBase ? buildBaseIndexUrl(config.pageUrl) : config.pageUrl, page);
@@ -577,9 +713,26 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
     }
     let response;
     try {
+      report({
+        phase: "page:start",
+        page,
+        url,
+        current: page - config.startPage,
+        total: config.maxPages,
+        message: `获取列表第 ${page} 页`
+      });
       response = await fetchWithSession(fetchImpl, url, requestConfig);
       for (let attempt = 0; isTransientDiscoveryStatus(response.status) && attempt < config.rateLimitRetries; attempt += 1) {
         if (config.rateLimitDelayMs > 0) {
+          report({
+            phase: "page:retry-wait",
+            page,
+            url,
+            attempt: attempt + 2,
+            status: response.status,
+            delayMs: config.rateLimitDelayMs * (attempt + 1),
+            message: `第 ${page} 页遇到 HTTP ${response.status}，等待后重试`
+          });
           await sleepImpl(config.rateLimitDelayMs * (attempt + 1));
         }
         response = await fetchWithSession(fetchImpl, url, requestConfig);
@@ -587,6 +740,13 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
     } catch (error) {
       pages.push({ page, url, rows: 0, error: formatFetchError(error, requestConfig) });
       warnings.push(`第 ${page} 页采集失败：${formatFetchError(error, requestConfig)}`);
+      report({
+        phase: "page:error",
+        page,
+        url,
+        error: formatFetchError(error, requestConfig),
+        message: `第 ${page} 页采集失败`
+      });
       break;
     }
     let effectiveUrl = url;
@@ -601,6 +761,14 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
       const error = await describeBadResponse(response);
       pages.push({ page, url: effectiveUrl, rows: 0, error });
       warnings.push(`第 ${page} 页采集失败：${error}`);
+      report({
+        phase: "page:error",
+        page,
+        url: effectiveUrl,
+        status: response.status,
+        error,
+        message: `第 ${page} 页采集失败：${error}`
+      });
       break;
     }
 
@@ -608,6 +776,15 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
     const pageRows = parseTableRows(html);
     pages.push({ page, url: effectiveUrl, rows: pageRows.length });
     rows.push(...pageRows);
+    report({
+      phase: "page:done",
+      page,
+      url: effectiveUrl,
+      rows: pageRows.length,
+      current: page - config.startPage + 1,
+      total: config.maxPages,
+      message: `第 ${page} 页解析到 ${pageRows.length} 条源`
+    });
 
     if (!html.includes("下一页") || pageRows.length === 0) {
       break;
@@ -615,10 +792,18 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
   }
 
   const selectedRows = filterRows(rows, config, now);
+  report({
+    phase: "rows:selected",
+    rows: selectedRows.length,
+    current: 0,
+    total: selectedRows.length,
+    message: `筛选后准备逐条采集 ${selectedRows.length} 条源`
+  });
   if (config.resolveDetailUrls && selectedRows.length > 0) {
     await ensureAdVerification(fetchImpl, config.pageUrl, requestConfig);
   }
   const sources = [];
+  const skippedSources = [];
   const seenSourceUrls = new Set();
   let skippedWithoutDetailUrl = 0;
   let skippedDuplicateUrls = 0;
@@ -626,30 +811,104 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
   let detailIndex = 0;
   for (const row of selectedRows) {
     let sourceUrl = buildM3uUrl(config.pageUrl, row);
+    let channelListUrl = "";
     let resolvedFromDetail = false;
+    report({
+      phase: "source:start",
+      ip: row.ip,
+      typeName: row.typeName,
+      current: detailIndex,
+      total: selectedRows.length,
+      row,
+      message: `开始采集 ${row.ip}（${row.typeName}）`
+    });
     if (config.resolveDetailUrls) {
       if (detailIndex > 0 && config.detailDelayMs > 0) {
+        report({
+          phase: "source:wait",
+          ip: row.ip,
+          typeName: row.typeName,
+          delayMs: config.detailDelayMs,
+          message: `等待后采集下一条：${row.ip}`
+        });
         await sleepImpl(config.detailDelayMs);
       }
       detailIndex += 1;
-      const detailM3uUrl = await resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl);
-      if (detailM3uUrl) {
-        sourceUrl = detailM3uUrl;
+      const detailResult = await resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, report);
+      if (detailResult.m3uUrl) {
+        sourceUrl = detailResult.m3uUrl;
+        channelListUrl = detailResult.channelListUrl;
         resolvedFromDetail = true;
       } else {
         skippedWithoutDetailUrl += 1;
+        const skipped = {
+          ...row,
+          reason: "detail-missing",
+          detailUrl: buildDetailUrl(config.pageUrl, row),
+          message: "未取到真实 M3U 接口"
+        };
+        skippedSources.push(skipped);
+        report({
+          phase: "source:skip",
+          ip: row.ip,
+          typeName: row.typeName,
+          reason: skipped.reason,
+          row,
+          message: `跳过 ${row.ip}：未取到真实 M3U 接口`
+        });
         continue;
       }
     }
     if (config.validateM3uUrls && resolvedFromDetail) {
-      const m3uCheck = await checkM3uUrl(fetchImpl, sourceUrl, config.pageUrl, requestConfig);
+      const m3uCheck = await checkM3uUrlWithRetries(fetchImpl, sourceUrl, channelListUrl || config.pageUrl, requestConfig, sleepImpl, row, report);
       if (!m3uCheck.ok || m3uCheck.channelLines <= 0) {
         skippedEmptyM3uUrls += 1;
+        const skipped = {
+          ...row,
+          reason: "m3u-empty",
+          m3uUrl: sourceUrl,
+          channelListUrl,
+          status: m3uCheck.status,
+          channelLines: m3uCheck.channelLines || 0,
+          bytes: m3uCheck.bytes || 0,
+          error: m3uCheck.error || "",
+          head: m3uCheck.head || "",
+          message: "M3U 地址未返回频道"
+        };
+        skippedSources.push(skipped);
+        report({
+          phase: "source:skip",
+          ip: row.ip,
+          typeName: row.typeName,
+          reason: skipped.reason,
+          m3uUrl: sourceUrl,
+          status: skipped.status,
+          channelLines: skipped.channelLines,
+          bytes: skipped.bytes,
+          error: skipped.error,
+          row,
+          message: `跳过 ${row.ip}：M3U 未返回频道`
+        });
         continue;
       }
     }
     if (seenSourceUrls.has(sourceUrl)) {
       skippedDuplicateUrls += 1;
+      skippedSources.push({
+        ...row,
+        reason: "duplicate",
+        m3uUrl: sourceUrl,
+        message: "重复 M3U 地址"
+      });
+      report({
+        phase: "source:skip",
+        ip: row.ip,
+        typeName: row.typeName,
+        reason: "duplicate",
+        m3uUrl: sourceUrl,
+        row,
+        message: `跳过 ${row.ip}：重复 M3U 地址`
+      });
       continue;
     }
     seenSourceUrls.add(sourceUrl);
@@ -664,6 +923,16 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
       updatedAt: row.updatedAt,
       status: row.status
     });
+    report({
+      phase: "source:added",
+      ip: row.ip,
+      typeName: row.typeName,
+      m3uUrl: sourceUrl,
+      current: detailIndex,
+      total: selectedRows.length,
+      row,
+      message: `采集成功 ${row.ip}：${row.channelCount || "未知"} 个频道`
+    });
   }
   if (skippedWithoutDetailUrl > 0) {
     warnings.push(`已跳过 ${skippedWithoutDetailUrl} 个未取到真实 M3U 的源。`);
@@ -675,7 +944,16 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
     warnings.push(`已跳过 ${skippedEmptyM3uUrls} 个无频道 M3U 地址。`);
   }
 
-  return { config, sources, rows: selectedRows, pages, warnings };
+  report({
+    phase: "discover:done",
+    sources: sources.length,
+    skipped: skippedSources.length,
+    current: selectedRows.length,
+    total: selectedRows.length,
+    message: `采集完成：成功 ${sources.length} 条，跳过 ${skippedSources.length} 条`
+  });
+
+  return { config, sources, rows: selectedRows, pages, warnings, skippedSources };
 }
 
 export async function debugAutoSourceByIp(configValue = {}, targetIp = "", options = {}) {

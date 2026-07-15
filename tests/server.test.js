@@ -887,6 +887,51 @@ describe("server routes", () => {
     expect(response.body.m3uCheck.channelLines).toBe(376);
   });
 
+  test("runs auto source discovery as a progress job", async () => {
+    const store = createFakeStore();
+    store.discoverAutoSources = jest.fn(async (_config, options = {}) => {
+      options.onProgress?.({ phase: "source:start", ip: "1.1.1.1", message: "开始采集 1.1.1.1" });
+      options.onProgress?.({ phase: "source:added", ip: "1.1.1.1", message: "采集成功 1.1.1.1" });
+      return {
+        sources: [{ typeName: "A", url: "http://example.com/a.m3u" }],
+        rows: [{ ip: "1.1.1.1" }],
+        warnings: []
+      };
+    });
+
+    const app = createApp(store);
+    const startResponse = await request(app)
+      .post("/api/auto-sources/discover-jobs")
+      .send({ enabled: true, keywords: ["电信"] });
+
+    expect(startResponse.status).toBe(200);
+    expect(startResponse.body).toEqual(expect.objectContaining({
+      id: expect.any(String),
+      status: "running"
+    }));
+
+    let jobResponse;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      jobResponse = await request(app).get(`/api/auto-sources/discover-jobs/${startResponse.body.id}`);
+      if (jobResponse.body.status === "done") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    expect(jobResponse.status).toBe(200);
+    expect(jobResponse.body.status).toBe("done");
+    expect(jobResponse.body.progress).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase: "source:start", ip: "1.1.1.1" }),
+      expect.objectContaining({ phase: "source:added", ip: "1.1.1.1" })
+    ]));
+    expect(jobResponse.body.result.sources[0].url).toBe("http://example.com/a.m3u");
+    expect(store.discoverAutoSources).toHaveBeenCalledWith(
+      { enabled: true, keywords: ["电信"] },
+      expect.objectContaining({ onProgress: expect.any(Function) })
+    );
+  });
+
   test("collects discovered auto sources into configured sources", async () => {
     const store = createFakeStore();
     const selectedSources = [

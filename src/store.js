@@ -480,8 +480,8 @@ export function createStore(options = {}) {
       await persistAutoSourceConfig();
       return { ...autoSourceConfig };
     },
-    async discoverAutoSources(config) {
-      return discoverAutoSourcesFromPage(config || autoSourceConfig, { fetchImpl, now });
+    async discoverAutoSources(config, discoveryOptions = {}) {
+      return discoverAutoSourcesFromPage(config || autoSourceConfig, { fetchImpl, now, ...discoveryOptions });
     },
     async debugAutoSourceByIp(config, ip) {
       return debugAutoSourceByIp(config || autoSourceConfig, ip, { fetchImpl, now });

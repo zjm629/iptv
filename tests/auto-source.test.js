@@ -547,6 +547,86 @@ describe("auto source discovery", () => {
     expect(result.warnings).toEqual(["已跳过 1 个未取到真实 M3U 的源。"]);
   });
 
+  test("reports per-source progress and skipped m3u validation details", async () => {
+    const events = [];
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("?p=top-sichuan&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => '<a href="?s=empty-token&t=multicast" class="btn btn-play">open</a>'
+        };
+      }
+      if (url.includes("?s=empty-token&t=multicast") && !url.includes("format=m3u")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => `
+            <a href="#" onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=empty-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;" class="btn btn-play" title="M3U">M3U</a>
+          `
+        };
+      }
+      if (url.includes("format=m3u")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "#EXTM3U\n"
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => SAMPLE_HTML
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      maxPages: 1,
+      todayOnly: false,
+      onlyStatus: "",
+      detailRetries: 0,
+      m3uCheckRetries: 0
+    }, {
+      fetchImpl: fetchMock,
+      onProgress: (event) => events.push(event),
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(result.sources).toEqual([]);
+    expect(result.skippedSources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        ip: "1.1.1.1",
+        reason: "m3u-empty",
+        m3uUrl: "http://iptv.cqshushu.com/index.php?s=empty-token&t=multicast&channels=1&format=m3u",
+        channelLines: 0
+      })
+    ]));
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase: "source:start", ip: "1.1.1.1" }),
+      expect.objectContaining({
+        phase: "source:channel-list",
+        ip: "1.1.1.1",
+        channelListUrl: "https://iptv.cqshushu.com/index.php?s=empty-token&t=multicast"
+      }),
+      expect.objectContaining({ phase: "source:skip", ip: "1.1.1.1", reason: "m3u-empty" })
+    ]));
+  });
+
   test("retries a detail page that does not expose a real m3u token at first", async () => {
     const waits = [];
     let detailRequests = 0;
@@ -727,7 +807,8 @@ describe("auto source discovery", () => {
       maxPages: 1,
       todayOnly: false,
       onlyStatus: "OK",
-      detailRetries: 0
+      detailRetries: 0,
+      m3uCheckRetries: 0
     }, {
       fetchImpl: fetchMock,
       now: new Date("2026-07-13T12:00:00+08:00")

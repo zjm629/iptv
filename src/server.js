@@ -208,6 +208,8 @@ export function createApp(store, options = {}) {
   const hlsStartTimeoutMs = options.hlsStartTimeoutMs ?? Number.parseInt(process.env.HLS_START_TIMEOUT_MS || String(DEFAULT_HLS_START_TIMEOUT_MS), 10);
   const hlsIdleTimeoutMs = options.hlsIdleTimeoutMs ?? Number.parseInt(process.env.HLS_IDLE_TIMEOUT_MS || "30000", 10);
   const hlsSessions = new Map();
+  const discoveryJobs = new Map();
+  const discoveryJobTtlMs = options.discoveryJobTtlMs ?? 30 * 60 * 1000;
 
   function stopHlsSession(sessionId) {
     const session = hlsSessions.get(sessionId);
@@ -420,6 +422,60 @@ export function createApp(store, options = {}) {
     } catch (error) {
       res.status(400).json({ error: error.message });
     }
+  });
+
+  app.post("/api/auto-sources/discover-jobs", (req, res) => {
+    const id = crypto.randomUUID();
+    const job = {
+      id,
+      status: "running",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      progress: [],
+      result: null,
+      error: ""
+    };
+    discoveryJobs.set(id, job);
+
+    Promise.resolve().then(async () => {
+      const result = await store.discoverAutoSources(req.body || {}, {
+        onProgress: (event) => {
+          job.updatedAt = new Date().toISOString();
+          job.progress.push(event);
+          if (job.progress.length > 500) {
+            job.progress.splice(0, job.progress.length - 500);
+          }
+        }
+      });
+      job.status = "done";
+      job.updatedAt = new Date().toISOString();
+      job.result = result;
+    }).catch((error) => {
+      job.status = "error";
+      job.updatedAt = new Date().toISOString();
+      job.error = error.message || String(error);
+      job.progress.push({
+        time: new Date().toISOString(),
+        phase: "discover:error",
+        error: job.error,
+        message: `采集失败：${job.error}`
+      });
+    }).finally(() => {
+      setTimeout(() => {
+        discoveryJobs.delete(id);
+      }, discoveryJobTtlMs).unref?.();
+    });
+
+    res.json(job);
+  });
+
+  app.get("/api/auto-sources/discover-jobs/:jobId", (req, res) => {
+    const job = discoveryJobs.get(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ error: "Discovery job not found." });
+      return;
+    }
+    res.json(job);
   });
 
   app.post("/api/auto-sources/debug", async (req, res) => {

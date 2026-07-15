@@ -868,6 +868,52 @@ export function renderCollectorPage() {
       flex-wrap: wrap;
       align-items: center;
     }
+    .progress-wrap {
+      margin-top: 12px;
+      display: grid;
+      gap: 8px;
+    }
+    .progress-track {
+      height: 12px;
+      border-radius: 999px;
+      background: var(--soft);
+      overflow: hidden;
+      border: 1px solid var(--line);
+    }
+    .progress-bar {
+      width: 0%;
+      height: 100%;
+      background: var(--accent);
+      transition: width 180ms ease;
+    }
+    .log {
+      margin-top: 12px;
+      max-height: 260px;
+      overflow: auto;
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+    }
+    .log-line {
+      display: grid;
+      grid-template-columns: minmax(70px, 90px) 1fr;
+      gap: 8px;
+      padding: 6px 0;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+    }
+    .skipped {
+      margin-top: 12px;
+      display: grid;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .skipped-row {
+      border-top: 1px solid var(--line);
+      padding-top: 8px;
+      overflow-wrap: anywhere;
+    }
     .warning { color: var(--danger); }
     @media (max-width: 760px) {
       .collector-grid, .result-row { grid-template-columns: 1fr; }
@@ -898,11 +944,17 @@ export function renderCollectorPage() {
         <button id="collect" class="secondary">提交选中到首页采集源</button>
         <span class="muted" id="message"></span>
       </div>
+      <div class="progress-wrap">
+        <div class="progress-track"><div class="progress-bar" id="progress-bar"></div></div>
+        <div class="muted" id="progress-text">等待开始</div>
+      </div>
     </section>
     <section class="panel">
       <h2>采集结果</h2>
       <div id="warnings"></div>
       <div class="results" id="results"></div>
+      <div class="skipped" id="skipped"></div>
+      <div class="log" id="progress-log"></div>
     </section>
   </main>
   <script>
@@ -933,11 +985,36 @@ export function renderCollectorPage() {
         pageDelayMs: 8000,
         rateLimitDelayMs: 15000,
         rateLimitRetries: 1,
-        detailDelayMs: 1500,
-        detailRetryDelayMs: 6000,
+        detailDelayMs: 3000,
+        detailRetryDelayMs: 8000,
         detailRetries: 1,
+        m3uCheckRetries: 2,
+        m3uCheckRetryDelayMs: 5000,
         requestTimeoutMs: 15000
       };
+    }
+
+    function renderProgress(job) {
+      const progress = job.progress || [];
+      const latest = progress[progress.length - 1] || {};
+      const progressEvent = progress.slice().reverse().find((event) =>
+        event.current !== undefined || event.total !== undefined
+      ) || latest;
+      const result = job.result || {};
+      const total = progressEvent.total || (result.rows || []).length || 0;
+      const current = progressEvent.current || (job.status === "done" ? total : 0);
+      const percent = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : (job.status === "done" ? 100 : 0);
+      $("progress-bar").style.width = percent + "%";
+      $("progress-text").textContent = (latest.message || "正在准备采集...") + "（" + percent + "%）";
+      $("progress-log").innerHTML = progress.slice(-120).reverse().map((event) =>
+        "<div class='log-line'>" +
+        "<span>" + escapeHtml(event.time ? new Date(event.time).toLocaleTimeString() : "") + "</span>" +
+        "<span>" + escapeHtml(event.message || event.phase || "") +
+        (event.error ? "；" + escapeHtml(event.error) : "") +
+        (event.channelLines !== undefined ? "；频道 " + escapeHtml(event.channelLines) : "") +
+        (event.bytes !== undefined ? "；字节 " + escapeHtml(event.bytes) : "") +
+        "</span></div>"
+      ).join("");
     }
 
     function renderDiscovery(result) {
@@ -964,6 +1041,20 @@ export function renderCollectorPage() {
           "</div>"
         ).join("")
         : "<div class='muted'>暂未采集到符合条件的源。</div>";
+      const skipped = result.skippedSources || [];
+      $("skipped").innerHTML = skipped.length
+        ? "<strong>跳过明细</strong>" + skipped.map((source) =>
+          "<div class='skipped-row'>" +
+          "<div><strong>" + escapeHtml(source.ip || "") + "</strong> " + escapeHtml(source.typeName || "") + "</div>" +
+          "<div>原因：" + escapeHtml(source.message || source.reason || "") +
+          (source.channelLines !== undefined ? "；频道数：" + escapeHtml(source.channelLines) : "") +
+          (source.bytes !== undefined ? "；字节：" + escapeHtml(source.bytes) : "") +
+          "</div>" +
+          (source.m3uUrl ? "<div>M3U：" + escapeHtml(source.m3uUrl) + "</div>" : "") +
+          (source.head ? "<div>返回开头：" + escapeHtml(source.head) + "</div>" : "") +
+          "</div>"
+        ).join("")
+        : "";
       document.querySelectorAll(".test-potplayer").forEach((button) => {
         button.addEventListener("click", () => {
           window.location.href = "potplayer://" + button.dataset.url;
@@ -996,12 +1087,37 @@ export function renderCollectorPage() {
       return result;
     }
 
+    async function getJson(url) {
+      const response = await fetch(url);
+      const result = await parseJsonResponse(response);
+      if (!response.ok) {
+        throw new Error(result.error || "操作失败");
+      }
+      return result;
+    }
+
     $("preview").addEventListener("click", async () => {
       $("preview").disabled = true;
-      $("message").textContent = "慢速精采中... 正在逐条进入详情页提取真实 M3U，取不到会稍等后重试一次。";
+      $("message").textContent = "已启动慢速精采，正在逐条进入详情页提取真实 M3U。";
+      $("warnings").innerHTML = "";
+      $("results").innerHTML = "";
+      $("skipped").innerHTML = "";
+      $("progress-log").innerHTML = "";
+      $("progress-bar").style.width = "0%";
+      $("progress-text").textContent = "正在启动采集任务...";
       try {
-        const result = await postJson("/api/auto-sources/discover", configFromForm());
-        renderDiscovery(result);
+        let job = await postJson("/api/auto-sources/discover-jobs", configFromForm());
+        renderProgress(job);
+        while (job.status === "running") {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          job = await getJson("/api/auto-sources/discover-jobs/" + encodeURIComponent(job.id));
+          renderProgress(job);
+        }
+        if (job.status === "error") {
+          throw new Error(job.error || "采集失败");
+        }
+        renderDiscovery(job.result || {});
+        renderProgress(job);
         $("message").textContent = "预览到 " + latestSources.length + " 个源";
       } catch (error) {
         $("message").textContent = error.message;
