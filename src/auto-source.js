@@ -113,6 +113,21 @@ function buildBaseIndexUrl(pageUrl) {
   return url.toString();
 }
 
+function isBaseIndexUrl(pageUrl, value = "") {
+  if (!value) {
+    return false;
+  }
+  try {
+    const url = new URL(value, buildBaseIndexUrl(pageUrl));
+    const baseUrl = new URL(buildBaseIndexUrl(pageUrl));
+    return url.origin === baseUrl.origin &&
+      url.pathname === baseUrl.pathname &&
+      !url.search;
+  } catch (_error) {
+    return false;
+  }
+}
+
 function buildChallengeUrl(pageUrl) {
   const url = new URL(pageUrl);
   url.searchParams.set("_js_challenge", "1");
@@ -1066,6 +1081,19 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
         detailUrl,
         error: error.message,
         message: `点击未跳转，改用同会话详情页：${row.ip}`
+      });
+      await client.send("Page.navigate", { url: detailUrl, referrer: startUrl }, sessionId, commandTimeoutMs);
+      detailPage = await waitForStablePage(client, sessionId, requestConfig, detailUrl);
+    }
+    if (isBaseIndexUrl(startUrl, detailPage.finalUrl)) {
+      report({
+        phase: "source:detail-click-home-fallback",
+        ip: row.ip,
+        typeName: row.typeName,
+        startUrl,
+        detailUrl,
+        finalUrl: detailPage.finalUrl,
+        message: `点击源后回到首页，改用同会话详情页：${row.ip}`
       });
       await client.send("Page.navigate", { url: detailUrl, referrer: startUrl }, sessionId, commandTimeoutMs);
       detailPage = await waitForStablePage(client, sessionId, requestConfig, detailUrl);
@@ -2024,4 +2052,4 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
   return result;
 }
 
-export { browserCookiesFromHeader, filterRows, normalizeAutoSourceConfig, parseTableRows, todayInShanghai };
+export { browserCookiesFromHeader, filterRows, isBaseIndexUrl, normalizeAutoSourceConfig, parseTableRows, todayInShanghai };

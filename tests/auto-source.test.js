@@ -1,4 +1,4 @@
-import { browserCookiesFromHeader, debugAutoSourceByIp, discoverAutoSources, filterRows, normalizeAutoSourceConfig, parseTableRows } from "../src/auto-source.js";
+import { browserCookiesFromHeader, debugAutoSourceByIp, discoverAutoSources, filterRows, isBaseIndexUrl, normalizeAutoSourceConfig, parseTableRows } from "../src/auto-source.js";
 
 const SAMPLE_HTML = `
 <table><tbody>
@@ -76,6 +76,14 @@ describe("auto source discovery", () => {
       detailInitialDelayMs: 8000,
       detailRetryDelayMs: 15000
     }));
+  });
+
+  test("detects when a clicked source lands back on the source homepage", () => {
+    const pageUrl = "https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1";
+
+    expect(isBaseIndexUrl(pageUrl, "https://iptv.cqshushu.com/index.php")).toBe(true);
+    expect(isBaseIndexUrl(pageUrl, "https://iptv.cqshushu.com/index.php?p=abc&t=multicast")).toBe(false);
+    expect(isBaseIndexUrl(pageUrl, "https://iptv.cqshushu.com/index.php?s=abc&t=multicast")).toBe(false);
   });
 
   test("uses browser-like headers for discovery requests", async () => {
