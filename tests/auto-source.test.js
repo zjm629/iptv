@@ -1,4 +1,4 @@
-import { browserCookiesFromHeader, centerPointFromRect, chooseChannelListCandidate, debugAutoSourceByIp, discoverAutoSources, filterRows, isBaseIndexUrl, normalizeAutoSourceConfig, parseTableRows } from "../src/auto-source.js";
+import { browserCookiesFromHeader, centerPointFromRect, chooseChannelListCandidate, debugAutoSourceByIp, discoverAutoSources, dispatchTrustedLinkClick, filterRows, isBaseIndexUrl, normalizeAutoSourceConfig, parseTableRows } from "../src/auto-source.js";
 
 const SAMPLE_HTML = `
 <table><tbody>
@@ -115,6 +115,43 @@ describe("auto source discovery", () => {
       y: 36
     });
     expect(centerPointFromRect({ x: 10, y: 20, width: 0, height: 31 })).toBeNull();
+  });
+
+  test("opens a raw-source channel URL through a trusted mouse click", async () => {
+    const calls = [];
+    const client = {
+      async send(method, params, sessionId) {
+        calls.push({ method, params, sessionId });
+        if (method === "Runtime.evaluate") {
+          return {
+            result: {
+              value: {
+                rect: { x: 10, y: 20, width: 100, height: 30 }
+              }
+            }
+          };
+        }
+        return {};
+      }
+    };
+
+    await dispatchTrustedLinkClick(
+      client,
+      "session-1",
+      "https://iptv.cqshushu.com/index.php?s=oEBHWHFvZF9VPDkiOpHpTg&t=multicast",
+      5000
+    );
+
+    expect(calls[0]).toEqual(expect.objectContaining({
+      method: "Runtime.evaluate",
+      sessionId: "session-1"
+    }));
+    expect(calls[0].params.expression).toContain("oEBHWHFvZF9VPDkiOpHpTg");
+    expect(calls.slice(1).map((call) => call.method)).toEqual([
+      "Input.dispatchMouseEvent",
+      "Input.dispatchMouseEvent",
+      "Input.dispatchMouseEvent"
+    ]);
   });
 
   test("uses browser-like headers for discovery requests", async () => {
@@ -746,6 +783,183 @@ describe("auto source discovery", () => {
         phase: "source:detail-mismatch",
         ip: "113.169.27.44",
         expectedIp: "113.169.27.44"
+      })
+    ]));
+  });
+
+  test("prefers raw source html over rendered detail html when the rendered page is polluted", async () => {
+    const tableHtml = `
+      <table><tbody>
+      <tr>
+        <td><a onclick="gotoIP('click-token','multicast')">113.169.27.44</a></td>
+        <td>200</td><td>Sichuan Telecom</td>
+        <td>2026-07-13 06:30</td><td>2026-07-13 17:00:00</td>
+        <td><span>OK</span></td>
+      </tr>
+      </tbody></table>
+    `;
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("?s=real-token&t=multicast")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => `
+            <a href="#"
+               onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=real-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;"
+               title="M3U interface">M3U interface</a>
+          `
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => tableHtml
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      maxPages: 1,
+      todayOnly: false,
+      onlyStatus: "OK",
+      browserFetch: true,
+      detailRetries: 0,
+      validateM3uUrls: false
+    }, {
+      fetchImpl: fetchMock,
+      browserClickHtmlImpl: async () => ({
+        html: `
+          <div>IP详情：113.169.27.44</div>
+          <a href="?s=wrong-token&t=multicast">查看频道列表</a>
+        `,
+        sourceHtml: `
+          <div>113.169.27.44</div>
+          <a href="?s=real-token&t=multicast" title="channel list">channel list</a>
+          <div>IP详情：113.169.27.44</div>
+          <a href="?s=real-token&t=multicast">查看频道列表</a>
+        `,
+        finalUrl: "https://iptv.cqshushu.com/index.php?p=click-token&t=multicast"
+      }),
+      browserHtmlImpl: async (url) => {
+        if (url.includes("?s=real-token&t=multicast")) {
+          return `
+            <a href="#"
+               onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=real-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;"
+               title="M3U接口">M3U接口</a>
+          `;
+        }
+        return tableHtml;
+      },
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=real-token&t=multicast&channels=1&format=m3u");
+  });
+
+  test("does not direct-fetch a raw-source channel URL when its trusted click lands on a different token", async () => {
+    const directChannelListRequests = [];
+    const events = [];
+    const tableHtml = `
+      <table><tbody>
+      <tr>
+        <td><a onclick="gotoIP('click-token','multicast')">113.169.27.44</a></td>
+        <td>200</td><td>Sichuan Telecom</td>
+        <td>2026-07-13 06:30</td><td>2026-07-13 17:00:00</td>
+        <td><span>OK</span></td>
+      </tr>
+      </tbody></table>
+    `;
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("?s=real-token&t=multicast")) {
+        directChannelListRequests.push(url);
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => `
+            <a href="#"
+               onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=real-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;"
+               title="M3U interface">M3U interface</a>
+          `
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => tableHtml
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      maxPages: 1,
+      todayOnly: false,
+      onlyStatus: "OK",
+      browserFetch: true,
+      detailRetries: 0,
+      validateM3uUrls: false
+    }, {
+      fetchImpl: fetchMock,
+      browserClickHtmlImpl: async () => ({
+        html: `
+          <div>IP详情：113.169.27.44</div>
+          <a href="?s=wrong-token&t=multicast">查看频道列表</a>
+        `,
+        sourceHtml: `
+          <div>113.169.27.44</div>
+          <a href="?s=real-token&t=multicast">查看频道列表</a>
+        `,
+        finalUrl: "https://iptv.cqshushu.com/index.php?p=click-token&t=multicast",
+        channelListHtml: `
+          <a href="#"
+             onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=wrong-token&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;"
+             title="M3U interface">M3U interface</a>
+        `,
+        channelListFinalUrl: "https://iptv.cqshushu.com/index.php?s=wrong-token&t=multicast"
+      }),
+      onProgress: (event) => events.push(event),
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(directChannelListRequests).toEqual([]);
+    expect(result.sources).toEqual([]);
+    expect(result.skippedSources[0]).toEqual(expect.objectContaining({
+      ip: "113.169.27.44",
+      reason: "detail-missing"
+    }));
+    expect(result.skippedSources[0].detailSummary.channelListBlocked).toEqual(expect.objectContaining({
+      reason: "source-click-mismatch",
+      expectedToken: "real-token",
+      actualToken: "wrong-token"
+    }));
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        phase: "source:channel-list-blocked",
+        expectedToken: "real-token",
+        actualToken: "wrong-token"
       })
     ]));
   });
@@ -1951,5 +2165,79 @@ describe("auto source discovery", () => {
         error: "VPS 被源站拒绝访问：HTTP 403 Access denied"
       })
     ]);
+  });
+
+  test("debug discovery prefers the raw detail response over a polluted rendered DOM", async () => {
+    const tableHtml = `
+      <table><tbody>
+      <tr>
+        <td><a onclick="gotoIP('detail-token','multicast')">113.169.27.44</a></td>
+        <td>200</td><td>Sichuan Telecom</td>
+        <td>2026-07-13 06:30</td><td>2026-07-13 17:00:00</td>
+        <td><span>OK</span></td>
+      </tr>
+      </tbody></table>
+    `;
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("format=m3u")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "#EXTM3U\n#EXTINF:-1,CCTV1\nhttp://example.com/live.ts\n"
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => tableHtml
+      };
+    };
+
+    const result = await debugAutoSourceByIp({
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      startPage: 1,
+      maxPages: 1,
+      browserFetch: true,
+      validateM3uUrls: false
+    }, "113.169.27.44", {
+      fetchImpl: fetchMock,
+      browserClickHtmlImpl: async () => ({
+        html: `
+          <div>IP详情：113.169.27.44</div>
+          <a href="?s=random-token&t=multicast">查看频道列表</a>
+        `,
+        sourceHtml: `
+          <div>IP详情：113.169.27.44</div>
+          <a href="?s=oEBHWHFvZF9VPDkiOpHpTg&t=multicast">查看频道列表</a>
+        `,
+        finalUrl: "https://iptv.cqshushu.com/index.php?p=detail-token&t=multicast",
+        channelListHtml: `
+          <a href="#" onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=random-token&amp;t=multicast&amp;channels=1&amp;format=m3u')">M3U接口</a>
+        `,
+        channelListSourceHtml: `
+          <a href="#" onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=oEBHWHFvZF9VPDkiOpHpTg&amp;t=multicast&amp;channels=1&amp;format=m3u')">M3U接口</a>
+        `,
+        channelListFinalUrl: "https://iptv.cqshushu.com/index.php?s=oEBHWHFvZF9VPDkiOpHpTg&t=multicast"
+      }),
+      now: new Date("2026-07-13T12:00:00+08:00")
+    });
+
+    expect(result.detail.channelListUrl).toBe(
+      "https://iptv.cqshushu.com/index.php?s=oEBHWHFvZF9VPDkiOpHpTg&t=multicast"
+    );
+    expect(result.channelList.selectedM3uUrl).toBe(
+      "http://iptv.cqshushu.com/index.php?s=oEBHWHFvZF9VPDkiOpHpTg&t=multicast&channels=1&format=m3u"
+    );
   });
 });

@@ -284,6 +284,7 @@ function hasChannelListText(value = "") {
   const text = stripTags(decodeHtmlEntities(value));
   return text.includes("\u67e5\u770b\u9891\u9053\u5217\u8868") ||
     text.includes("\u9891\u9053\u5217\u8868") ||
+    /channel\s*list/i.test(text) ||
     isChannelListLink(text);
 }
 
@@ -319,10 +320,8 @@ function parseDetailChannelListUrl(html = "", pageUrl = "https://iptv.cqshushu.c
     const href = readAttribute(match[1], "href");
     const label = `${match[1]} ${match[2]}`;
     const labelText = stripTags(decodeHtmlEntities(label));
-    const hasChannelListText = labelText.includes("\u67e5\u770b\u9891\u9053\u5217\u8868") ||
-      labelText.includes("\u9891\u9053\u5217\u8868") ||
-      isChannelListLink(label);
-    if (hasChannelListText) {
+    const isChannelList = hasChannelListText(labelText) || isChannelListLink(label);
+    if (isChannelList) {
       const url = normalizeChannelListUrl(pageUrl, href);
       if (url) {
         return url;
@@ -613,7 +612,14 @@ async function removeBrowserDataDir(browserDataDir = "") {
   if (!browserDataDir || !browserDataDir.startsWith(os.tmpdir())) {
     return;
   }
-  await fs.rm(browserDataDir, { recursive: true, force: true });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await fs.rm(browserDataDir, { recursive: true, force: true });
+      return;
+    } catch (_error) {
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    }
+  }
 }
 
 function isTransientDiscoveryStatus(status) {
@@ -712,6 +718,7 @@ async function fetchHtmlWithBrowser(url, requestConfig, browserReferrer = "") {
       return {
         response: { ok: true, status: 200 },
         html: rendered.html,
+        sourceHtml: rendered.sourceHtml || "",
         finalUrl: rendered.finalUrl,
         browser: true
       };
@@ -794,6 +801,31 @@ async function dispatchTrustedClick(client, sessionId, point, commandTimeoutMs) 
   }, sessionId, commandTimeoutMs);
 }
 
+async function dispatchTrustedLinkClick(client, sessionId, url, commandTimeoutMs) {
+  const evaluated = await client.send("Runtime.evaluate", {
+    expression: `(() => {
+      const id = "__iptv_source_channel_link";
+      document.getElementById(id)?.remove();
+      const link = document.createElement("a");
+      link.id = id;
+      link.href = ${JSON.stringify(url)};
+      link.textContent = "Open channel list";
+      link.target = "_self";
+      link.style.cssText = "position:fixed;left:20px;top:20px;width:180px;height:44px;z-index:2147483647;display:block;opacity:1;background:#fff;color:#000";
+      document.body.appendChild(link);
+      const rect = link.getBoundingClientRect();
+      return {
+        href: link.href,
+        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+      };
+    })()`,
+    returnByValue: true
+  }, sessionId, commandTimeoutMs);
+  const result = evaluated?.result?.value || {};
+  await dispatchTrustedClick(client, sessionId, centerPointFromRect(result.rect), commandTimeoutMs);
+  return result;
+}
+
 async function fetchDetailHtmlByClick(row, detailUrl, requestConfig, report = () => {}) {
   const startUrl = row.discoveryPageUrl || requestConfig.pageUrl;
   if (!requestConfig.browserFetch || !startUrl) {
@@ -816,14 +848,32 @@ async function fetchDetailHtmlByClick(row, detailUrl, requestConfig, report = ()
       `Browser click rendering timed out for ${row.ip}`
     );
     const html = typeof rendered === "string" ? rendered : rendered?.html || "";
+    const sourceHtml = typeof rendered === "object" ? rendered.sourceHtml || "" : "";
+    const channelListHtml = typeof rendered === "object" ? rendered.channelListHtml || "" : "";
+    const channelListFinalUrl = typeof rendered === "object" ? rendered.channelListFinalUrl || "" : "";
+    const sourceChannelListUrl = parseDetailChannelListUrl(sourceHtml, startUrl);
+    const sourceChannelToken = readSourceToken(startUrl, sourceChannelListUrl);
+    const clickedChannelToken = readSourceToken(startUrl, channelListFinalUrl);
+    const channelListBlocked = sourceChannelListUrl && channelListHtml && sourceChannelToken && clickedChannelToken && sourceChannelToken !== clickedChannelToken
+      ? {
+        reason: "source-click-mismatch",
+        expectedChannelListUrl: sourceChannelListUrl,
+        actualChannelListUrl: channelListFinalUrl,
+        expectedToken: sourceChannelToken,
+        actualToken: clickedChannelToken
+      }
+      : null;
     return {
       response: { ok: true, status: 200 },
       html,
+      sourceHtml,
       finalUrl: typeof rendered === "object" && rendered?.finalUrl ? rendered.finalUrl : detailUrl,
       browser: true,
       clicked: true,
-      channelListHtml: typeof rendered === "object" ? rendered.channelListHtml || "" : "",
-      channelListFinalUrl: typeof rendered === "object" ? rendered.channelListFinalUrl || "" : ""
+      channelListHtml,
+      channelListSourceHtml: typeof rendered === "object" ? rendered.channelListSourceHtml || "" : "",
+      channelListFinalUrl,
+      channelListBlocked
     };
   }
 
@@ -840,10 +890,12 @@ async function fetchDetailHtmlByClick(row, detailUrl, requestConfig, report = ()
       return {
         response: { ok: true, status: 200 },
         html: rendered.html,
+        sourceHtml: rendered.sourceHtml || "",
         finalUrl: rendered.finalUrl,
         browser: true,
         clicked: true,
         channelListHtml: rendered.channelListHtml || "",
+        channelListSourceHtml: rendered.channelListSourceHtml || "",
         channelListFinalUrl: rendered.channelListFinalUrl || ""
       };
     } catch (error) {
@@ -907,6 +959,7 @@ function createCdpClient(wsUrl) {
   const ws = new WebSocket(wsUrl);
   let nextId = 1;
   const pending = new Map();
+  const listeners = new Map();
   const openPromise = new Promise((resolve, reject) => {
     ws.addEventListener("open", resolve, { once: true });
     ws.addEventListener("error", () => reject(new Error("Chromium DevTools WebSocket failed")), { once: true });
@@ -914,6 +967,11 @@ function createCdpClient(wsUrl) {
   ws.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
     if (!message.id || !pending.has(message.id)) {
+      if (message.method && listeners.has(message.method)) {
+        for (const listener of listeners.get(message.method)) {
+          listener(message.params || {}, message.sessionId || "");
+        }
+      }
       return;
     }
     const { resolve, reject, timer } = pending.get(message.id);
@@ -952,6 +1010,19 @@ function createCdpClient(wsUrl) {
       });
       ws.send(JSON.stringify(payload));
       return response;
+    },
+    on(method, listener) {
+      const items = listeners.get(method) || [];
+      items.push(listener);
+      listeners.set(method, items);
+      return () => {
+        const nextItems = (listeners.get(method) || []).filter((item) => item !== listener);
+        if (nextItems.length > 0) {
+          listeners.set(method, nextItems);
+        } else {
+          listeners.delete(method);
+        }
+      };
     },
     close() {
       try {
@@ -1012,6 +1083,7 @@ async function renderHtmlWithChromium(command, url, requestConfig, browserReferr
   ];
   const chrome = spawn(command, args, { stdio: ["ignore", "ignore", "pipe"] });
   let client;
+  let sourceTracker;
   try {
     const commandTimeoutMs = cdpCommandTimeoutMs(requestConfig);
     const wsUrl = await waitForProcessOutput(chrome, /DevTools listening on (ws:\/\/[^\s]+)/, commandTimeoutMs);
@@ -1020,6 +1092,8 @@ async function renderHtmlWithChromium(command, url, requestConfig, browserReferr
     const { sessionId } = await client.send("Target.attachToTarget", { targetId, flatten: true }, "", commandTimeoutMs);
     await client.send("Page.enable", {}, sessionId, commandTimeoutMs);
     await client.send("Runtime.enable", {}, sessionId, commandTimeoutMs);
+    await client.send("Network.enable", {}, sessionId, commandTimeoutMs);
+    sourceTracker = createDocumentBodyTracker(client, sessionId);
     await client.send("Page.addScriptToEvaluateOnNewDocument", { source: STEALTH_SCRIPT }, sessionId, commandTimeoutMs);
     await seedBrowserCookies(client, sessionId, url, requestConfig, commandTimeoutMs);
     const navigateParams = { url };
@@ -1043,11 +1117,14 @@ async function renderHtmlWithChromium(command, url, requestConfig, browserReferr
       const text = value.text || "";
       const stillChecking = text.includes("安全验证中") || text.includes("正在确认您的浏览器安全环境");
       if (lastHtml && value.readyState === "complete" && !stillChecking) {
-        return { html: lastHtml, finalUrl: lastFinalUrl };
+        const sourceHtml = await sourceTracker.getHtml(client, lastFinalUrl, commandTimeoutMs);
+        return { html: lastHtml, sourceHtml, finalUrl: lastFinalUrl };
       }
     }
-    return { html: lastHtml, finalUrl: lastFinalUrl };
+    const sourceHtml = await sourceTracker.getHtml(client, lastFinalUrl, commandTimeoutMs);
+    return { html: lastHtml, sourceHtml, finalUrl: lastFinalUrl };
   } finally {
+    sourceTracker?.close();
     client?.close();
     if (!chrome.killed) {
       chrome.kill("SIGKILL");
@@ -1070,6 +1147,7 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
   ];
   const chrome = spawn(command, args, { stdio: ["ignore", "ignore", "pipe"] });
   let client;
+  let sourceTracker;
   try {
     const commandTimeoutMs = cdpCommandTimeoutMs(requestConfig);
     const wsUrl = await waitForProcessOutput(chrome, /DevTools listening on (ws:\/\/[^\s]+)/, commandTimeoutMs);
@@ -1078,6 +1156,8 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
     const { sessionId } = await client.send("Target.attachToTarget", { targetId, flatten: true }, "", commandTimeoutMs);
     await client.send("Page.enable", {}, sessionId, commandTimeoutMs);
     await client.send("Runtime.enable", {}, sessionId, commandTimeoutMs);
+    await client.send("Network.enable", {}, sessionId, commandTimeoutMs);
+    sourceTracker = createDocumentBodyTracker(client, sessionId);
     await client.send("Page.addScriptToEvaluateOnNewDocument", { source: STEALTH_SCRIPT }, sessionId, commandTimeoutMs);
     const seededCookies = await seedBrowserCookies(client, sessionId, startUrl, requestConfig, commandTimeoutMs);
     if (seededCookies > 0) {
@@ -1190,8 +1270,75 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
       await client.send("Page.navigate", { url: detailUrl, referrer: startUrl }, sessionId, commandTimeoutMs);
       detailPage = await waitForStablePage(client, sessionId, requestConfig, detailUrl);
     }
+    detailPage.sourceHtml = await sourceTracker.getHtml(client, detailPage.finalUrl, commandTimeoutMs);
 
-    const preferredChannelListUrl = parseDetailChannelListUrl(detailPage.html, startUrl);
+    const sourceChannelListUrl = parseDetailChannelListUrl(detailPage.sourceHtml || "", startUrl);
+    if (sourceChannelListUrl) {
+      try {
+        report({
+          phase: "source:channel-list-source-navigate",
+          ip: row.ip,
+          typeName: row.typeName,
+          channelListUrl: sourceChannelListUrl,
+          message: `按详情页源码打开频道列表：${row.ip}`
+        });
+        await dispatchTrustedLinkClick(client, sessionId, sourceChannelListUrl, commandTimeoutMs);
+        const channelPage = await waitForStablePage(client, sessionId, requestConfig, detailPage.finalUrl, { requireUrlChange: true });
+        const actualChannelListUrl = normalizeChannelListUrl(startUrl, channelPage.finalUrl);
+        channelPage.sourceHtml = await sourceTracker.getHtml(client, channelPage.finalUrl, commandTimeoutMs);
+        const sourceChannelToken = readSourceToken(startUrl, sourceChannelListUrl);
+        const actualChannelToken = readSourceToken(startUrl, actualChannelListUrl);
+        if (actualChannelListUrl && (!sourceChannelToken || sourceChannelToken === actualChannelToken)) {
+          return {
+            ...detailPage,
+            channelListHtml: channelPage.html,
+            channelListSourceHtml: channelPage.sourceHtml || "",
+            channelListFinalUrl: actualChannelListUrl,
+            channelListClickedText: "source-html",
+            channelListClickedHref: sourceChannelListUrl
+          };
+        }
+        report({
+          phase: "source:channel-list-source-mismatch",
+          ip: row.ip,
+          typeName: row.typeName,
+          expectedChannelListUrl: sourceChannelListUrl,
+          actualChannelListUrl,
+          expectedToken: sourceChannelToken,
+          actualToken: actualChannelToken,
+          message: `源码频道列表跳转不匹配：${row.ip}`
+        });
+        return {
+          ...detailPage,
+          channelListBlocked: {
+            reason: "source-click-mismatch",
+            expectedChannelListUrl: sourceChannelListUrl,
+            actualChannelListUrl,
+            expectedToken: sourceChannelToken,
+            actualToken: actualChannelToken
+          }
+        };
+      } catch (error) {
+        report({
+          phase: "source:channel-list-source-error",
+          ip: row.ip,
+          typeName: row.typeName,
+          channelListUrl: sourceChannelListUrl,
+          error: formatFetchError(error, requestConfig),
+          message: `按详情页源码打开频道列表失败：${row.ip}`
+        });
+        return {
+          ...detailPage,
+          channelListBlocked: {
+            reason: "source-click-error",
+            expectedChannelListUrl: sourceChannelListUrl,
+            error: formatFetchError(error, requestConfig)
+          }
+        };
+      }
+    }
+
+    const preferredChannelListUrl = parseDetailChannelListUrl(detailPage.sourceHtml || detailPage.html, startUrl);
     const selectedChannel = await waitForChannelListCandidate(client, sessionId, requestConfig, preferredChannelListUrl);
     if (!selectedChannel) {
       return detailPage;
@@ -1235,6 +1382,7 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
       await dispatchTrustedClick(client, sessionId, centerPointFromRect(channelClicked.rect), commandTimeoutMs);
       const channelPage = await waitForStablePage(client, sessionId, requestConfig, detailPage.finalUrl, { requireUrlChange: true });
       const actualChannelListUrl = normalizeChannelListUrl(startUrl, channelPage.finalUrl);
+      channelPage.sourceHtml = await sourceTracker.getHtml(client, channelPage.finalUrl, commandTimeoutMs);
       if (!actualChannelListUrl) {
         report({
           phase: "source:channel-list-redirect-home",
@@ -1251,6 +1399,7 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
       return {
         ...detailPage,
         channelListHtml: channelPage.html,
+        channelListSourceHtml: channelPage.sourceHtml || "",
         channelListFinalUrl: actualChannelListUrl,
         channelListClickedText: channelClicked.text,
         channelListClickedHref: channelClicked.linkHref
@@ -1267,6 +1416,7 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
       return detailPage;
     }
   } finally {
+    sourceTracker?.close();
     client?.close();
     if (!chrome.killed) {
       chrome.kill("SIGKILL");
@@ -1309,6 +1459,100 @@ async function waitForStablePage(client, sessionId, requestConfig, fallbackUrl =
     throw new Error(`Clicked source link but URL did not change from list page: ${fallbackUrl}`);
   }
   return { html: lastHtml, finalUrl: lastFinalUrl };
+}
+
+function normalizeDocumentUrl(value = "") {
+  if (!value) {
+    return "";
+  }
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    return url.toString();
+  } catch (_error) {
+    return String(value).split("#")[0];
+  }
+}
+
+function createDocumentBodyTracker(client, sessionId) {
+  const latestByUrl = new Map();
+  const latestByRequestId = new Map();
+  const unsubscribeResponse = client.on("Network.responseReceived", (params, eventSessionId) => {
+    if (eventSessionId && eventSessionId !== sessionId) {
+      return;
+    }
+    if (params.type !== "Document" || !params.response?.url) {
+      return;
+    }
+    const url = normalizeDocumentUrl(params.response.url);
+    const item = {
+      requestId: params.requestId,
+      url,
+      finished: false,
+      bodyPromise: null
+    };
+    latestByUrl.set(url, item);
+    latestByRequestId.set(params.requestId, item);
+  });
+  const unsubscribeFinished = client.on("Network.loadingFinished", (params, eventSessionId) => {
+    if (eventSessionId && eventSessionId !== sessionId) {
+      return;
+    }
+    const item = latestByRequestId.get(params.requestId);
+    if (!item || item.bodyPromise) {
+      return;
+    }
+    item.finished = true;
+    item.bodyPromise = client.send("Network.getResponseBody", {
+      requestId: item.requestId
+    }, sessionId, 10000).then((body) => (
+      body?.base64Encoded
+        ? Buffer.from(body.body || "", "base64").toString("utf8")
+        : String(body?.body || "")
+    )).catch(() => "");
+  });
+  const unsubscribeFailed = client.on("Network.loadingFailed", (params, eventSessionId) => {
+    if (eventSessionId && eventSessionId !== sessionId) {
+      return;
+    }
+    const item = latestByRequestId.get(params.requestId);
+    latestByRequestId.delete(params.requestId);
+    if (item && latestByUrl.get(item.url) === item) {
+      latestByUrl.delete(item.url);
+    }
+  });
+
+  return {
+    async getHtml(clientInstance, pageUrl, commandTimeoutMs) {
+      const targetUrl = normalizeDocumentUrl(pageUrl);
+      const deadline = Date.now() + Math.min(commandTimeoutMs, 5000);
+      while (Date.now() < deadline) {
+        const candidate = latestByUrl.get(targetUrl);
+        if (candidate?.finished) {
+          if (!candidate.bodyPromise) {
+            candidate.bodyPromise = clientInstance.send("Network.getResponseBody", {
+              requestId: candidate.requestId
+            }, sessionId, Math.max(500, deadline - Date.now())).then((body) => (
+              body?.base64Encoded
+                ? Buffer.from(body.body || "", "base64").toString("utf8")
+                : String(body?.body || "")
+            )).catch(() => "");
+          }
+          const raw = await candidate.bodyPromise;
+          if (raw) {
+            return raw;
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      return "";
+    },
+    close() {
+      unsubscribeResponse?.();
+      unsubscribeFinished?.();
+      unsubscribeFailed?.();
+    }
+  };
 }
 
 async function readChannelListCandidates(client, sessionId, commandTimeoutMs) {
@@ -1458,9 +1702,10 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
       continue;
     }
     previousStatus = detail.response.status;
+    const detailParseHtml = detail.sourceHtml || detail.html;
     const detailValidation = detail.response.ok
-      ? validateDetailPageForRow(detail.html, row, requestConfig.pageUrl)
-      : { ok: false, channelListUrl: "", summary: summarizeHtmlPage(detail.html), hasExpectedIp: false, expectedIp: row.ip };
+      ? validateDetailPageForRow(detailParseHtml, row, requestConfig.pageUrl)
+      : { ok: false, channelListUrl: "", summary: summarizeHtmlPage(detailParseHtml), hasExpectedIp: false, expectedIp: row.ip };
     const channelListUrl = detailValidation.channelListUrl;
     if (detail.response.ok && detail.clicked === true && !detailValidation.ok) {
       lastDetailSummary = detailValidation.summary;
@@ -1509,6 +1754,23 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
       });
       continue;
     }
+    if (detail.channelListBlocked) {
+      lastDetailSummary = {
+        ...detailValidation.summary,
+        channelListBlocked: detail.channelListBlocked
+      };
+      report({
+        phase: "source:channel-list-blocked",
+        ip: row.ip,
+        typeName: row.typeName,
+        attempt: attempt + 1,
+        channelListUrl,
+        ...detail.channelListBlocked,
+        message: `频道列表点击链不可信，跳过直接请求：${row.ip}`
+      });
+      previousStatus = 0;
+      continue;
+    }
     let channelList;
     try {
       throwIfAborted(requestConfig.abortSignal);
@@ -1520,10 +1782,29 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
         channelListUrl,
         message: `分析频道列表：${row.ip}`
       });
-      if (detail.channelListHtml) {
+      const channelListParseHtml = detail.channelListSourceHtml || detail.channelListHtml;
+      const expectedChannelToken = readSourceToken(requestConfig.pageUrl, channelListUrl);
+      const clickedChannelUrl = detail.channelListFinalUrl || "";
+      const clickedChannelToken = readSourceToken(requestConfig.pageUrl, clickedChannelUrl);
+      const canUseClickedChannelList = channelListParseHtml &&
+        (!detail.sourceHtml || !expectedChannelToken || !clickedChannelToken || clickedChannelToken === expectedChannelToken);
+      if (channelListParseHtml && !canUseClickedChannelList) {
+        report({
+          phase: "source:channel-list-polluted",
+          ip: row.ip,
+          typeName: row.typeName,
+          attempt: attempt + 1,
+          expectedChannelListUrl: channelListUrl,
+          clickedChannelListUrl: clickedChannelUrl,
+          expectedToken: expectedChannelToken,
+          clickedToken: clickedChannelToken,
+          message: `丢弃不匹配的频道列表：${row.ip}`
+        });
+      }
+      if (canUseClickedChannelList) {
         channelList = {
           response: { ok: true, status: 200 },
-          html: detail.channelListHtml,
+          html: channelListParseHtml,
           finalUrl: detail.channelListFinalUrl || channelListUrl,
           browser: true,
           clicked: true
@@ -2140,26 +2421,42 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
     };
     return result;
   }
-  const channelListUrl = detail.response.ok ? parseDetailChannelListUrl(detail.html, config.pageUrl) : "";
+  const detailParseHtml = detail.sourceHtml || detail.html;
+  const channelListUrl = detail.response.ok ? parseDetailChannelListUrl(detailParseHtml, config.pageUrl) : "";
   const detailExpectedToken = readSourceToken(config.pageUrl, channelListUrl);
   result.detail = {
     url: detailUrl,
     status: detail.response.status,
     channelListUrl,
     expectedToken: detailExpectedToken,
-    anchors: summarizeTokenAnchors(detail.html, config.pageUrl, detailExpectedToken)
+    anchors: summarizeTokenAnchors(detailParseHtml, config.pageUrl, detailExpectedToken),
+    blocked: detail.channelListBlocked || null
   };
 
   if (!channelListUrl) {
     return result;
   }
+  if (detail.channelListBlocked) {
+    result.channelList = {
+      url: channelListUrl,
+      status: 0,
+      error: detail.channelListBlocked.reason,
+      anchors: [],
+      selectedM3uUrl: ""
+    };
+    return result;
+  }
 
   let channelList;
   try {
-    if (detail.channelListHtml) {
+    const channelListParseHtml = detail.channelListSourceHtml || detail.channelListHtml;
+    const clickedChannelToken = readSourceToken(config.pageUrl, detail.channelListFinalUrl || "");
+    const canUseClickedChannelList = channelListParseHtml &&
+      (!detail.sourceHtml || !detailExpectedToken || !clickedChannelToken || clickedChannelToken === detailExpectedToken);
+    if (canUseClickedChannelList) {
       channelList = {
         response: { ok: true, status: 200 },
-        html: detail.channelListHtml,
+        html: channelListParseHtml,
         finalUrl: detail.channelListFinalUrl || channelListUrl,
         browser: true,
         clicked: true
@@ -2220,4 +2517,4 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
   return result;
 }
 
-export { browserCookiesFromHeader, centerPointFromRect, chooseChannelListCandidate, filterRows, isBaseIndexUrl, normalizeAutoSourceConfig, parseTableRows, todayInShanghai };
+export { browserCookiesFromHeader, centerPointFromRect, chooseChannelListCandidate, dispatchTrustedLinkClick, filterRows, isBaseIndexUrl, normalizeAutoSourceConfig, parseTableRows, todayInShanghai };
