@@ -173,6 +173,65 @@ http://auto.example/cctv1.m3u8
     }));
   });
 
+  test("persists successful collector sources and reuses same-day cache by ip", async () => {
+    const { configPath, cachePath } = await createTempConfig([]);
+    const pageHtml = (token) => `
+<table><tbody>
+<tr><td><a onclick="gotoIP('${token}','multicast')">1.2.3.4</a></td><td>88</td><td>Test Telecom</td><td>2026-07-16</td><td>2026-07-16 12:00:00</td><td>new</td></tr>
+</tbody></table>`;
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: true, text: async () => pageHtml("first-token") })
+      .mockResolvedValueOnce({ ok: true, text: async () => pageHtml("changed-token") });
+    const store = createStore({
+      configPath,
+      cachePath,
+      fetchImpl: fetchMock,
+      now: new Date("2026-07-16T12:00:00+08:00")
+    });
+    await store.load();
+
+    const config = {
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      todayOnly: true,
+      onlyStatus: "new",
+      maxPages: 1,
+      resolveDetailUrls: false,
+      validateM3uUrls: false
+    };
+    const first = await store.discoverAutoSources(config);
+
+    expect(first.sources[0]).toEqual(expect.objectContaining({
+      ip: "1.2.3.4",
+      url: "https://iptv.cqshushu.com/index.php?s=first-token&t=multicast&channels=1&format=m3u"
+    }));
+    expect(JSON.parse(await fs.readFile(cachePath, "utf8")).collectorSourceCache).toEqual([
+      expect.objectContaining({
+        date: "2026-07-16",
+        ip: "1.2.3.4",
+        url: "https://iptv.cqshushu.com/index.php?s=first-token&t=multicast&channels=1&format=m3u"
+      })
+    ]);
+
+    const restartedStore = createStore({
+      configPath,
+      cachePath,
+      fetchImpl: fetchMock,
+      now: new Date("2026-07-16T12:00:00+08:00")
+    });
+    await restartedStore.load();
+    const second = await restartedStore.discoverAutoSources(config);
+
+    expect(second.sources[0]).toEqual(expect.objectContaining({
+      cached: true,
+      ip: "1.2.3.4",
+      url: "https://iptv.cqshushu.com/index.php?s=first-token&t=multicast&channels=1&format=m3u"
+    }));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   test("hidden auto source types stay disabled after rediscovery finds a newer url", async () => {
     const { configPath, cachePath, autoSourcesPath } = await createTempConfig([]);
     const store = createStore({

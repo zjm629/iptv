@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { debugAutoSourceByIp, discoverAutoSources as discoverAutoSourcesFromPage, normalizeAutoSourceConfig } from "./auto-source.js";
+import { debugAutoSourceByIp, discoverAutoSources as discoverAutoSourcesFromPage, normalizeAutoSourceConfig, todayInShanghai } from "./auto-source.js";
 import { parseM3u } from "./m3u.js";
 import { normalizeChannelName } from "./normalize.js";
 
@@ -163,6 +163,40 @@ function normalizeCachedAutoSources(sources) {
     .filter(Boolean);
 }
 
+function normalizeCollectorSourceCache(sources) {
+  if (!Array.isArray(sources)) {
+    return [];
+  }
+
+  return sources
+    .map((source) => {
+      const ip = String(source?.ip || "").trim();
+      const url = String(source?.url || source?.m3uUrl || "").trim();
+      const date = String(source?.date || "").trim();
+      if (!ip || !url || !date) {
+        return null;
+      }
+
+      const typeName = String(source?.typeName || "").trim();
+      const name = String(source?.name || (typeName ? `自动-${typeName}` : `自动-${ip}`)).trim();
+      return {
+        date,
+        ip,
+        name,
+        url,
+        auto: true,
+        typeName,
+        channelCount: source?.channelCount ?? source?.channelLines ?? "",
+        onlineAt: String(source?.onlineAt || "").trim(),
+        updatedAt: String(source?.updatedAt || "").trim(),
+        status: String(source?.status || "").trim(),
+        channelListUrl: String(source?.channelListUrl || "").trim(),
+        cachedAt: String(source?.cachedAt || "").trim()
+      };
+    })
+    .filter(Boolean);
+}
+
 function filterAutoSourcesByConfig(sources, config) {
   const disabledTypeNames = new Set(config.disabledTypeNames || []);
   return normalizeCachedAutoSources(sources).filter((source) => !disabledTypeNames.has(source.typeName));
@@ -282,6 +316,7 @@ export function createStore(options = {}) {
   let overrides = createInitialOverrides();
   let autoSourceConfig = createInitialAutoSourceConfig();
   let lastSuccessfulAutoSources = [];
+  let collectorSourceCache = [];
   let status = createInitialStatus();
   let refreshPromise = null;
 
@@ -336,6 +371,7 @@ export function createStore(options = {}) {
 
     channels = Array.isArray(cache.channels) ? cache.channels : [];
     lastSuccessfulAutoSources = normalizeCachedAutoSources(cache.lastSuccessfulAutoSources);
+    collectorSourceCache = normalizeCollectorSourceCache(cache.collectorSourceCache);
     status = {
       ...createInitialStatus(),
       ...cache.status,
@@ -345,7 +381,78 @@ export function createStore(options = {}) {
 
   async function persistCache() {
     await fs.mkdir(path.dirname(cachePath), { recursive: true });
-    await fs.writeFile(cachePath, JSON.stringify({ channels, status, lastSuccessfulAutoSources }, null, 2), "utf8");
+    await fs.writeFile(cachePath, JSON.stringify({ channels, status, lastSuccessfulAutoSources, collectorSourceCache }, null, 2), "utf8");
+  }
+
+  function getCollectorCacheDate() {
+    return todayInShanghai(now || new Date());
+  }
+
+  function getSameDayCollectorSourceCache() {
+    const today = getCollectorCacheDate();
+    return collectorSourceCache.filter((source) => source.date === today);
+  }
+
+  async function rememberCollectorSource(event = {}) {
+    const row = event.row || {};
+    const ip = String(event.ip || row.ip || "").trim();
+    const url = String(event.m3uUrl || event.url || "").trim();
+    if (!ip || !url) {
+      return;
+    }
+
+    const typeName = String(event.typeName || row.typeName || "").trim();
+    const date = getCollectorCacheDate();
+    const cachedAt = nowIso();
+    const nextSource = normalizeCollectorSourceCache([{
+      date,
+      ip,
+      name: event.name || (typeName ? `自动-${typeName}` : `自动-${ip}`),
+      url,
+      typeName,
+      channelCount: event.channelLines ?? event.channelCount ?? row.channelCount,
+      onlineAt: event.onlineAt ?? row.onlineAt,
+      updatedAt: event.updatedAt ?? row.updatedAt,
+      status: event.status ?? row.status,
+      channelListUrl: event.channelListUrl || row.channelListUrl,
+      cachedAt
+    }])[0];
+    if (!nextSource) {
+      return;
+    }
+
+    collectorSourceCache = [
+      ...collectorSourceCache.filter((source) => !(source.date === date && source.ip === ip)),
+      nextSource
+    ];
+    await persistCache();
+  }
+
+  async function discoverAndCacheAutoSources(config, discoveryOptions = {}) {
+    let cacheWriteChain = Promise.resolve();
+    const originalProgress = discoveryOptions.onProgress;
+    const sourceCache = [
+      ...getSameDayCollectorSourceCache(),
+      ...(Array.isArray(discoveryOptions.sourceCache) ? discoveryOptions.sourceCache : [])
+    ];
+    const wrappedProgress = (event) => {
+      if (event?.phase === "source:added") {
+        cacheWriteChain = cacheWriteChain.then(() => rememberCollectorSource(event));
+      }
+      originalProgress?.(event);
+    };
+
+    try {
+      return await discoverAutoSourcesFromPage(config || autoSourceConfig, {
+        fetchImpl,
+        now,
+        ...discoveryOptions,
+        sourceCache,
+        onProgress: wrappedProgress
+      });
+    } finally {
+      await cacheWriteChain;
+    }
   }
 
   async function runRefresh() {
@@ -361,7 +468,7 @@ export function createStore(options = {}) {
 
     if (autoSourceConfig.enabled) {
       try {
-        autoDiscovery = await discoverAutoSourcesFromPage(autoSourceConfig, { fetchImpl, now });
+        autoDiscovery = await discoverAndCacheAutoSources(autoSourceConfig);
         if (autoDiscovery.sources.length > 0) {
           usedAutoSources = normalizeCachedAutoSources(autoDiscovery.sources);
           lastSuccessfulAutoSources = usedAutoSources;
@@ -481,7 +588,7 @@ export function createStore(options = {}) {
       return { ...autoSourceConfig };
     },
     async discoverAutoSources(config, discoveryOptions = {}) {
-      return discoverAutoSourcesFromPage(config || autoSourceConfig, { fetchImpl, now, ...discoveryOptions });
+      return discoverAndCacheAutoSources(config || autoSourceConfig, discoveryOptions);
     },
     async debugAutoSourceByIp(config, ip) {
       return debugAutoSourceByIp(config || autoSourceConfig, ip, { fetchImpl, now });

@@ -239,6 +239,38 @@ export function createApp(store, options = {}) {
   const discoveryJobControllers = new Map();
   const discoveryJobTtlMs = options.discoveryJobTtlMs ?? 30 * 60 * 1000;
 
+  function appendDiscoveryJobSource(job, event) {
+    const url = event.m3uUrl || event.url;
+    if (!url) {
+      return;
+    }
+
+    const row = event.row || {};
+    const typeName = event.typeName || row.typeName;
+    const source = {
+      name: event.name || `自动-${typeName || event.ip || row.ip || "source"}`,
+      url,
+      auto: true,
+      cached: event.phase === "source:cached" || undefined,
+      ip: event.ip || row.ip,
+      channelCount: event.channelLines ?? event.channelCount ?? row.channelCount,
+      typeName,
+      onlineAt: event.onlineAt ?? row.onlineAt,
+      updatedAt: event.updatedAt ?? row.updatedAt,
+      status: event.status ?? row.status,
+      channelListUrl: event.channelListUrl || row.channelListUrl
+    };
+    const existingIndex = job.result.sources.findIndex((item) => item.url === url);
+    if (existingIndex >= 0) {
+      job.result.sources[existingIndex] = {
+        ...job.result.sources[existingIndex],
+        ...source
+      };
+    } else {
+      job.result.sources.push(source);
+    }
+  }
+
   function stopHlsSession(sessionId) {
     const session = hlsSessions.get(sessionId);
     if (!session) {
@@ -483,33 +515,8 @@ export function createApp(store, options = {}) {
         onProgress: (event) => {
           job.updatedAt = new Date().toISOString();
           job.progress.push(event);
-          if (event.phase === "source:added") {
-            const url = event.m3uUrl || event.url;
-            if (url) {
-              const row = event.row || {};
-              const typeName = event.typeName || row.typeName;
-              const source = {
-                name: event.name || `\u81ea\u52a8-${typeName || event.ip || row.ip || "source"}`,
-                url,
-                auto: true,
-                ip: event.ip || row.ip,
-                channelCount: event.channelLines ?? event.channelCount ?? row.channelCount,
-                typeName,
-                onlineAt: event.onlineAt ?? row.onlineAt,
-                updatedAt: event.updatedAt ?? row.updatedAt,
-                status: event.status ?? row.status,
-                channelListUrl: event.channelListUrl || row.channelListUrl
-              };
-              const existingIndex = job.result.sources.findIndex((item) => item.url === url);
-              if (existingIndex >= 0) {
-                job.result.sources[existingIndex] = {
-                  ...job.result.sources[existingIndex],
-                  ...source
-                };
-              } else {
-                job.result.sources.push(source);
-              }
-            }
+          if (event.phase === "source:added" || event.phase === "source:cached") {
+            appendDiscoveryJobSource(job, event);
           }
           if (job.progress.length > 500) {
             job.progress.splice(0, job.progress.length - 500);

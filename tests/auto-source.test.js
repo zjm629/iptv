@@ -1996,6 +1996,83 @@ describe("auto source discovery", () => {
     ]);
   });
 
+  test("uses cached source by ip before resolving detail", async () => {
+    const events = [];
+    let detailRequests = 0;
+    const tableHtml = `
+      <table><tbody>
+      <tr>
+        <td><a onclick="gotoIP('cached-token','multicast')">58.158.40.74</a></td>
+        <td>203</td><td>上海市上海市组播 上海电信</td>
+        <td>2026-07-16 06:30</td><td>2026-07-16 12:05:45</td>
+        <td><span>新上线</span></td>
+      </tr>
+      </tbody></table>
+    `;
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      if (url.includes("?p=cached-token&t=multicast")) {
+        detailRequests += 1;
+        throw new Error("detail page should not be requested for cached ip");
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => tableHtml
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      maxPages: 1,
+      todayOnly: false,
+      onlyStatus: "新上线",
+      detailRetries: 0,
+      validateM3uUrls: false
+    }, {
+      fetchImpl: fetchMock,
+      sourceCache: [
+        {
+          ip: "58.158.40.74",
+          name: "自动-上海市上海市组播 上海电信",
+          url: "http://iptv.cqshushu.com/index.php?s=cached-real&t=multicast&channels=1&format=m3u",
+          channelCount: "203",
+          typeName: "上海市上海市组播 上海电信",
+          updatedAt: "2026-07-16 12:05:45",
+          status: "新上线"
+        }
+      ],
+      onProgress: (event) => events.push(event),
+      now: new Date("2026-07-16T12:10:00+08:00")
+    });
+
+    expect(detailRequests).toBe(0);
+    expect(result.sources).toEqual([
+      expect.objectContaining({
+        ip: "58.158.40.74",
+        url: "http://iptv.cqshushu.com/index.php?s=cached-real&t=multicast&channels=1&format=m3u",
+        cached: true
+      })
+    ]);
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        phase: "source:cached",
+        ip: "58.158.40.74",
+        m3uUrl: "http://iptv.cqshushu.com/index.php?s=cached-real&t=multicast&channels=1&format=m3u"
+      })
+    ]));
+  });
+
   test("stops discovery before requests when cancelled", async () => {
     const controller = new AbortController();
     let fetchCalls = 0;

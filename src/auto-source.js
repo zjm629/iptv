@@ -2151,6 +2151,9 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
   const sources = [];
   const skippedSources = [];
   const seenSourceUrls = new Set();
+  const cachedSourcesByIp = new Map((options.sourceCache || [])
+    .filter((source) => source?.ip && source?.url)
+    .map((source) => [String(source.ip), source]));
   let skippedWithoutDetailUrl = 0;
   let skippedDuplicateUrls = 0;
   let skippedEmptyM3uUrls = 0;
@@ -2169,6 +2172,57 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
       row,
       message: `开始采集 ${row.ip}（${row.typeName}）`
     });
+    const cachedSource = cachedSourcesByIp.get(String(row.ip));
+    if (cachedSource) {
+      detailIndex += 1;
+      sourceUrl = cachedSource.url;
+      if (seenSourceUrls.has(sourceUrl)) {
+        skippedDuplicateUrls += 1;
+        skippedSources.push({
+          ...row,
+          reason: "duplicate",
+          m3uUrl: sourceUrl,
+          message: "重复 M3U 地址"
+        });
+        report({
+          phase: "source:skip",
+          ip: row.ip,
+          typeName: row.typeName,
+          reason: "duplicate",
+          m3uUrl: sourceUrl,
+          row,
+          message: `跳过 ${row.ip}：重复 M3U 地址`
+        });
+        continue;
+      }
+      seenSourceUrls.add(sourceUrl);
+      const source = {
+        name: cachedSource.name || `自动-${cachedSource.typeName || row.typeName}`,
+        url: sourceUrl,
+        auto: true,
+        cached: true,
+        ip: row.ip,
+        channelCount: cachedSource.channelCount || row.channelCount,
+        typeName: cachedSource.typeName || row.typeName,
+        onlineAt: cachedSource.onlineAt || row.onlineAt,
+        updatedAt: cachedSource.updatedAt || row.updatedAt,
+        status: cachedSource.status || row.status,
+        channelListUrl: cachedSource.channelListUrl || ""
+      };
+      sources.push(source);
+      report({
+        phase: "source:cached",
+        ip: row.ip,
+        typeName: source.typeName,
+        m3uUrl: sourceUrl,
+        current: detailIndex,
+        total: selectedRows.length,
+        row,
+        channelLines: source.channelCount,
+        message: `命中缓存 ${row.ip}：跳过重复采集`
+      });
+      continue;
+    }
     if (config.resolveDetailUrls) {
       if (detailIndex > 0 && config.detailDelayMs > 0) {
         report({
@@ -2313,13 +2367,15 @@ export async function discoverAutoSources(configValue = {}, options = {}) {
       typeName: row.typeName,
       onlineAt: row.onlineAt,
       updatedAt: row.updatedAt,
-      status: row.status
+      status: row.status,
+      channelListUrl
     });
     report({
       phase: "source:added",
       ip: row.ip,
       typeName: row.typeName,
       m3uUrl: sourceUrl,
+      channelListUrl,
       current: detailIndex,
       total: selectedRows.length,
       row,

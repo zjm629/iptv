@@ -932,6 +932,54 @@ describe("server routes", () => {
     );
   });
 
+  test("keeps cached auto source progress in running job results", async () => {
+    const store = createFakeStore();
+    store.discoverAutoSources = jest.fn(async (_config, options = {}) => {
+      options.onProgress?.({
+        phase: "source:cached",
+        ip: "1.1.1.1",
+        typeName: "Cached Telecom",
+        m3uUrl: "http://example.com/cached.m3u",
+        row: {
+          channelCount: 66,
+          updatedAt: "2026-07-16 12:00:00",
+          status: "new",
+          channelListUrl: "https://example.com/list"
+        },
+        message: "cache hit"
+      });
+      return new Promise(() => {});
+    });
+
+    const app = createApp(store);
+    const startResponse = await request(app)
+      .post("/api/auto-sources/discover-jobs")
+      .send({ enabled: true });
+
+    let jobResponse;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      jobResponse = await request(app).get(`/api/auto-sources/discover-jobs/${startResponse.body.id}`);
+      if (jobResponse.body.result.sources.length > 0) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    expect(jobResponse.body.result.sources).toEqual([
+      expect.objectContaining({
+        ip: "1.1.1.1",
+        typeName: "Cached Telecom",
+        url: "http://example.com/cached.m3u",
+        channelCount: 66,
+        updatedAt: "2026-07-16 12:00:00",
+        status: "new"
+      })
+    ]);
+    await request(app)
+      .post(`/api/auto-sources/discover-jobs/${startResponse.body.id}/cancel`)
+      .expect(200);
+  });
+
   test("cancels a running auto source discovery job", async () => {
     const store = createFakeStore();
     let capturedSignal;
