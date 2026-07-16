@@ -1224,18 +1224,30 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
       returnByValue: true
     }, sessionId, commandTimeoutMs);
     const clicked = clickResult?.result?.value;
-    if (!clicked?.clicked) {
-      throw new Error(`Could not find source IP link on list page: ${JSON.stringify(clicked || {})}`);
+    if (clicked?.clicked) {
+      await dispatchTrustedClick(client, sessionId, centerPointFromRect(clicked.rect), commandTimeoutMs);
+    } else {
+      report({
+        phase: "source:detail-click-link-miss",
+        ip: row.ip,
+        typeName: row.typeName,
+        startUrl,
+        detailUrl,
+        linkCount: clicked?.linkCount,
+        pageText: clicked?.text,
+        message: `列表页未找到原始 IP 链接，改用已采集 token 可信点击：${row.ip}`
+      });
+      await dispatchTrustedLinkClick(client, sessionId, detailUrl, commandTimeoutMs);
     }
-    await dispatchTrustedClick(client, sessionId, centerPointFromRect(clicked.rect), commandTimeoutMs);
     report({
       phase: "source:detail-clicked",
       ip: row.ip,
       typeName: row.typeName,
       startUrl,
-      clickedHref: clicked.href,
-      clickedText: clicked.text,
-      clickedOnclick: clicked.onclick,
+      clickedHref: clicked?.href || detailUrl,
+      clickedText: clicked?.text || row.ip,
+      clickedOnclick: clicked?.onclick || "",
+      injected: !clicked?.clicked,
       message: `已点击列表源：${row.ip}`
     });
     let detailPage;
