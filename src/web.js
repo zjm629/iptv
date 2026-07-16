@@ -1208,7 +1208,7 @@ export function renderCollectorPage(options = {}) {
           .map((checkbox) => checkbox.dataset.url));
         const selectedSources = latestSources.filter((source) => selectedUrls.has(source.url));
         const result = await postJson("/api/auto-sources/collect", { sources: selectedSources });
-        $("message").textContent = "新增 " + (result.added || []).length + " 个源，已写入首页采集源";
+        $("message").textContent = "新增 " + (result.added || []).length + " 个源，更新 " + (result.updated || []).length + " 个源，已刷新首页采集源";
       } catch (error) {
         $("message").textContent = error.message;
       } finally {

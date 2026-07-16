@@ -30,6 +30,10 @@ function getBaseUrl(req) {
   return `${req.protocol}://${req.get("host")}`;
 }
 
+function collectedSourceName(source = {}) {
+  return String(source.typeName || source.name || "自动采集").trim();
+}
+
 function readAppVersion(options = {}) {
   if (options.appVersion) {
     return String(options.appVersion);
@@ -598,24 +602,51 @@ export function createApp(store, options = {}) {
   app.post("/api/auto-sources/collect", async (req, res) => {
     try {
       const currentSources = await store.getSources();
-      const existingUrls = new Set(currentSources.map((source) => source.url));
+      const mergedSources = currentSources.map((source) => ({ ...source }));
+      const existingUrls = new Set(mergedSources.map((source) => source.url));
       const additions = [];
+      const updates = [];
 
       for (const source of req.body?.sources || []) {
-        if (!source.url || existingUrls.has(source.url)) {
+        const name = collectedSourceName(source);
+        const url = String(source.url || "").trim();
+        if (!url) {
           continue;
         }
-        additions.push({
-          name: source.typeName || source.name || "自动采集",
-          url: source.url,
+
+        const matchingNameIndex = mergedSources.findIndex((existing) => existing.name && existing.name === name);
+        if (matchingNameIndex >= 0) {
+          const current = mergedSources[matchingNameIndex];
+          if (current.url !== url) {
+            existingUrls.delete(current.url);
+            mergedSources[matchingNameIndex] = {
+              ...current,
+              name,
+              url
+            };
+            existingUrls.add(url);
+            updates.push(mergedSources[matchingNameIndex]);
+          }
+          continue;
+        }
+
+        if (existingUrls.has(url)) {
+          continue;
+        }
+
+        const addition = {
+          name,
+          url,
           hidden: false
-        });
-        existingUrls.add(source.url);
+        };
+        additions.push(addition);
+        mergedSources.push(addition);
+        existingUrls.add(url);
       }
 
-      const sources = await store.saveSources([...currentSources, ...additions]);
+      const sources = await store.saveSources(mergedSources);
       await store.refresh();
-      res.json({ added: additions, sources, status: store.getStatus() });
+      res.json({ added: additions, updated: updates, sources, status: store.getStatus() });
     } catch (error) {
       res.status(400).json({ error: error.message });
     }

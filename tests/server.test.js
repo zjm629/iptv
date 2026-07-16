@@ -1032,6 +1032,56 @@ describe("server routes", () => {
     expect(response.body.added).toHaveLength(1);
   });
 
+  test("updates matching configured source when collected source has the same name", async () => {
+    const store = createFakeStore();
+    store.getSources = jest.fn(async () => [
+      {
+        name: "陕西西安组播 陕西电信",
+        url: "http://old.example/shaanxi.m3u",
+        hidden: true
+      },
+      {
+        name: "四川成都组播 四川电信",
+        url: "http://old.example/sichuan.m3u",
+        hidden: false
+      }
+    ]);
+
+    const response = await request(createApp(store))
+      .post("/api/auto-sources/collect")
+      .send({
+        sources: [
+          {
+            typeName: "陕西西安组播 陕西电信",
+            url: "http://iptv.cqshushu.com/index.php?s=new-shaanxi&t=multicast&channels=1&format=m3u"
+          }
+        ]
+      });
+
+    expect(response.status).toBe(200);
+    expect(store.saveSources).toHaveBeenCalledWith([
+      {
+        name: "陕西西安组播 陕西电信",
+        url: "http://iptv.cqshushu.com/index.php?s=new-shaanxi&t=multicast&channels=1&format=m3u",
+        hidden: true
+      },
+      {
+        name: "四川成都组播 四川电信",
+        url: "http://old.example/sichuan.m3u",
+        hidden: false
+      }
+    ]);
+    expect(store.refresh).toHaveBeenCalledTimes(1);
+    expect(response.body.added).toEqual([]);
+    expect(response.body.updated).toEqual([
+      expect.objectContaining({
+        name: "陕西西安组播 陕西电信",
+        url: "http://iptv.cqshushu.com/index.php?s=new-shaanxi&t=multicast&channels=1&format=m3u",
+        hidden: true
+      })
+    ]);
+  });
+
   test("returns web management page", async () => {
     const response = await request(createApp(createFakeStore(), { appVersion: "abc1234" })).get("/");
 
@@ -1087,6 +1137,7 @@ describe("server routes", () => {
     expect(response.text).toContain("potplayer://");
     expect(response.text).toContain("频道数");
     expect(response.text).toContain("更新时间");
+    expect(response.text).toContain("result.updated");
     expect(response.text).toContain("requestTimeoutMs");
     expect(response.text).toContain("page.error");
     expect(response.text).toContain("parseJsonResponse");
