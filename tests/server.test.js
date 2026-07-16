@@ -938,6 +938,18 @@ describe("server routes", () => {
     store.discoverAutoSources = jest.fn(async (_config, options = {}) => {
       capturedSignal = options.signal;
       options.onProgress?.({ phase: "source:start", ip: "1.1.1.1", message: "start" });
+      options.onProgress?.({
+        phase: "source:added",
+        ip: "1.1.1.1",
+        typeName: "A",
+        m3uUrl: "http://example.com/a.m3u",
+        row: {
+          channelCount: 10,
+          updatedAt: "2026-07-16 10:00:00",
+          status: "new"
+        },
+        message: "collected"
+      });
       return new Promise((_resolve, reject) => {
         options.signal?.addEventListener("abort", () => {
           reject(Object.assign(new Error("Collector job cancelled"), { name: "AbortError" }));
@@ -960,6 +972,16 @@ describe("server routes", () => {
     expect(cancelResponse.status).toBe(200);
     expect(cancelResponse.body.status).toBe("cancelled");
     expect(capturedSignal.aborted).toBe(true);
+    expect(cancelResponse.body.result.sources).toEqual([
+      expect.objectContaining({
+        ip: "1.1.1.1",
+        typeName: "A",
+        url: "http://example.com/a.m3u",
+        channelCount: 10,
+        updatedAt: "2026-07-16 10:00:00",
+        status: "new"
+      })
+    ]);
 
     let jobResponse;
     for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -974,6 +996,7 @@ describe("server routes", () => {
     expect(jobResponse.body.progress).toEqual(expect.arrayContaining([
       expect.objectContaining({ phase: "discover:cancelled" })
     ]));
+    expect(jobResponse.body.result.sources[0].url).toBe("http://example.com/a.m3u");
     expect(store.discoverAutoSources).toHaveBeenCalledWith(
       { enabled: true },
       expect.objectContaining({
@@ -1064,6 +1087,8 @@ describe("server routes", () => {
     expect(response.text).toContain("parseJsonResponse");
     expect(response.text).toContain("stop-preview");
     expect(response.text).toContain("/cancel");
+    expect(response.text.match(/renderDiscovery\(job\.result \|\| \{\}\);/g)).toHaveLength(3);
+    expect(response.text).toContain("保留已成功");
     expect(response.text).toContain("服务器返回空响应");
     expect(response.text).toContain("服务器返回的不是 JSON");
     expect(response.text).toContain("未解析到源列表");

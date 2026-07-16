@@ -1150,7 +1150,8 @@ export function renderCollectorPage(options = {}) {
           throw new Error(job.error || "采集失败");
         }
         if (job.status === "cancelled") {
-          $("message").textContent = "采集已停止";
+          renderDiscovery(job.result || {});
+          $("message").textContent = "\u91c7\u96c6\u5df2\u505c\u6b62\uff0c\u4fdd\u7559\u5df2\u6210\u529f " + latestSources.length + " \u4e2a\u6e90";
           renderProgress(job);
           return;
         }
@@ -1173,8 +1174,9 @@ export function renderCollectorPage(options = {}) {
       $("message").textContent = "正在停止采集...";
       try {
         const job = await postJson("/api/auto-sources/discover-jobs/" + encodeURIComponent(currentJobId) + "/cancel", {});
+        renderDiscovery(job.result || {});
         renderProgress(job);
-        $("message").textContent = "采集已停止";
+        $("message").textContent = "\u91c7\u96c6\u5df2\u505c\u6b62\uff0c\u4fdd\u7559\u5df2\u6210\u529f " + latestSources.length + " \u4e2a\u6e90";
       } catch (error) {
         $("message").textContent = error.message;
         $("stop-preview").disabled = false;
