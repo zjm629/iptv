@@ -319,6 +319,7 @@ export function renderHomePage(options = {}) {
       <a id="playlist-sources" href="/playlist-sources.m3u">playlist-sources.m3u</a>
       <a id="live-txt" href="/live.txt">live.txt</a>
       <a id="live-m3u" href="/live.m3u">live.m3u</a>
+      <button class="secondary" id="live-m3u-potplayer">PotPlayer播放</button>
     </section>
     <section class="status" id="status"></section>
     <section class="channels" id="channels"></section>
@@ -805,6 +806,9 @@ export function renderHomePage(options = {}) {
       await navigator.clipboard.writeText(new URL("/live.txt", location.href).href);
       $("copy").textContent = "已复制";
       setTimeout(() => $("copy").textContent = "复制播放列表地址", 1200);
+    });
+    $("live-m3u-potplayer").addEventListener("click", () => {
+      window.location.href = "potplayer://" + window.location.origin + "/live.m3u";
     });
     $("refresh").addEventListener("click", async () => {
       $("refresh").disabled = true;

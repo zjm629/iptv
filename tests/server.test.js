@@ -1048,6 +1048,11 @@ describe("server routes", () => {
     expect(response.text).toContain("playlist-sources.m3u");
     expect(response.text).toContain("live.txt");
     expect(response.text).toContain("live.m3u");
+    expect(response.text).toContain("id=\"live-m3u-potplayer\"");
+    expect(response.text).toContain("window.location.origin + \"/live.m3u\"");
+    expect(response.text).toContain("PotPlayer播放");
+    expect(response.text).not.toContain("playlist-sources-potplayer");
+    expect(response.text).not.toContain("live-txt-potplayer");
     expect(response.text).toContain("sort-order");
     expect(response.text).toContain("序号");
     expect(response.text).toContain("category-checkbox");
