@@ -488,6 +488,17 @@ export function createApp(store, options = {}) {
     }
   });
 
+  app.get("/api/auto-sources/collector-cache", (_req, res) => {
+    const sources = store.getCollectorSourceCache ? store.getCollectorSourceCache() : [];
+    res.json({
+      sources,
+      rows: [],
+      pages: [],
+      warnings: [],
+      skippedSources: []
+    });
+  });
+
   app.post("/api/auto-sources/discover-jobs", (req, res) => {
     const id = crypto.randomUUID();
     const controller = new AbortController();

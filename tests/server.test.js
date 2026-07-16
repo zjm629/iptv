@@ -45,6 +45,19 @@ function createFakeStore(channelOverrides) {
       ],
       rows: []
     })),
+    getCollectorSourceCache: jest.fn(() => [
+      {
+        date: "2026-07-16",
+        ip: "1.1.1.1",
+        name: "自动-四川成都组播 四川电信",
+        typeName: "四川成都组播 四川电信",
+        url: "http://iptv.cqshushu.com/index.php?s=cached&t=multicast&channels=1&format=m3u",
+        channelCount: "88",
+        updatedAt: "2026-07-16 12:00:00",
+        status: "新上线",
+        cachedAt: "2026-07-16T04:00:00.000Z"
+      }
+    ]),
     debugAutoSourceByIp: jest.fn(async (_config, ip) => ({
       targetIp: ip,
       row: { ip },
@@ -859,6 +872,21 @@ describe("server routes", () => {
     expect(response.body.sources[0].typeName).toBe("四川成都组播 四川电信");
   });
 
+  test("returns today's cached collector results", async () => {
+    const store = createFakeStore();
+    const response = await request(createApp(store)).get("/api/auto-sources/collector-cache");
+
+    expect(response.status).toBe(200);
+    expect(response.body.sources).toEqual([
+      expect.objectContaining({
+        ip: "1.1.1.1",
+        typeName: "四川成都组播 四川电信",
+        url: "http://iptv.cqshushu.com/index.php?s=cached&t=multicast&channels=1&format=m3u"
+      })
+    ]);
+    expect(store.getCollectorSourceCache).toHaveBeenCalledTimes(1);
+  });
+
   test("returns detailed auto source debug output for a target ip", async () => {
     const store = createFakeStore();
     const response = await request(createApp(store))
@@ -1181,6 +1209,9 @@ describe("server routes", () => {
     expect(response.text).toContain("https://iptv.cqshushu.com/index.php?q=%E7%94%B5%E4%BF%A1");
     expect(response.text).toContain("/api/auto-sources/collect");
     expect(response.text).toContain("select-all");
+    expect(response.text).toContain("today-cache");
+    expect(response.text).toContain("今日采集结果");
+    expect(response.text).toContain("/api/auto-sources/collector-cache");
     expect(response.text).toContain("PotPlayer测试");
     expect(response.text).toContain("potplayer://");
     expect(response.text).toContain("频道数");

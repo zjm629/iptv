@@ -953,6 +953,7 @@ export function renderCollectorPage(options = {}) {
       <div class="actions">
         <button id="preview">预览采集</button>
         <button id="stop-preview" class="danger" disabled>停止采集</button>
+        <button id="today-cache" class="secondary">今日采集结果</button>
         <button id="select-all" class="secondary">全选</button>
         <button id="clear-selected" class="secondary">取消全选</button>
         <button id="collect" class="secondary">提交选中到首页采集源</button>
@@ -1127,6 +1128,7 @@ export function renderCollectorPage(options = {}) {
 
     function setCollectorRunning(running) {
       $("preview").disabled = running;
+      $("today-cache").disabled = running;
       $("stop-preview").disabled = !running || !currentJobId;
     }
 
@@ -1181,9 +1183,31 @@ export function renderCollectorPage(options = {}) {
         renderDiscovery(job.result || {});
         renderProgress(job);
         $("message").textContent = "\u91c7\u96c6\u5df2\u505c\u6b62\uff0c\u4fdd\u7559\u5df2\u6210\u529f " + latestSources.length + " \u4e2a\u6e90";
+        currentJobId = "";
+        setCollectorRunning(false);
       } catch (error) {
         $("message").textContent = error.message;
         $("stop-preview").disabled = false;
+      }
+    });
+
+    $("today-cache").addEventListener("click", async () => {
+      $("today-cache").disabled = true;
+      $("message").textContent = "正在读取今日已成功采集结果...";
+      $("warnings").innerHTML = "";
+      $("skipped").innerHTML = "";
+      try {
+        const result = await getJson("/api/auto-sources/collector-cache");
+        renderDiscovery(result);
+        $("progress-bar").style.width = latestSources.length ? "100%" : "0%";
+        $("progress-text").textContent = latestSources.length
+          ? "已读取今日缓存结果（100%）"
+          : "今日暂无已成功采集结果";
+        $("message").textContent = "今日已成功采集 " + latestSources.length + " 个源，可直接全选并提交";
+      } catch (error) {
+        $("message").textContent = error.message;
+      } finally {
+        $("today-cache").disabled = false;
       }
     });
 

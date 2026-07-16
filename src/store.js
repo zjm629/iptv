@@ -590,6 +590,9 @@ export function createStore(options = {}) {
     async discoverAutoSources(config, discoveryOptions = {}) {
       return discoverAndCacheAutoSources(config || autoSourceConfig, discoveryOptions);
     },
+    getCollectorSourceCache() {
+      return getSameDayCollectorSourceCache().map((source) => ({ ...source }));
+    },
     async debugAutoSourceByIp(config, ip) {
       return debugAutoSourceByIp(config || autoSourceConfig, ip, { fetchImpl, now });
     },
