@@ -606,7 +606,7 @@ export function renderHomePage(options = {}) {
           "<a href='/play/" + encodeURIComponent(channel.id) + "?line=" + lineIndex + "'>线路 " +
           (lineIndex + 1) + " - " + escapeHtml(source.sourceName) + "</a><span>" + escapeHtml(source.url) + "</span>" +
           "<span class='line-actions'>" +
-          "<a class='linklike' href='/player/" + encodeURIComponent(channel.id) + "?line=" + lineIndex + "' target='_blank' rel='noopener'>测试播放</a>" +
+          "<button class='secondary play-line-potplayer' data-url='" + escapeHtml(source.url) + "'>PotPlayer播放</button>" +
           (source.preferred ? "<span class='badge'>默认</span>" : "<button class='linklike prefer-source' data-id='" + escapeHtml(channel.id) + "' data-url='" + escapeHtml(source.url) + "'>设为默认</button>") +
           "<button class='" + (source.disabled ? "secondary" : "danger") + " toggle-source' data-id='" + escapeHtml(channel.id) + "' data-url='" + escapeHtml(source.url) + "' data-disabled='" + (!source.disabled) + "'>" +
           (source.disabled ? "启用" : "禁用") + "</button>" +
@@ -669,6 +669,12 @@ export function renderHomePage(options = {}) {
           await postJson("/api/channels/" + encodeURIComponent(button.dataset.id) + "/override", {
             preferredSourceUrl: button.dataset.url
           });
+        });
+      });
+      document.querySelectorAll(".play-line-potplayer").forEach((button) => {
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          openPotPlayer(button.dataset.url);
         });
       });
       document.querySelectorAll(".toggle-source").forEach((button) => {

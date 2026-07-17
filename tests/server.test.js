@@ -1186,7 +1186,10 @@ describe("server routes", () => {
     expect(response.text).toContain("category-checkbox");
     expect(response.text).toContain("move-category");
     expect(response.text).toContain("分类");
-    expect(response.text).toContain("测试播放");
+    expect(response.text).toContain("play-line-potplayer");
+    expect(response.text).toContain("PotPlayer播放");
+    expect(response.text).not.toContain("测试播放");
+    expect(response.text).not.toContain("href='/player/");
     expect(response.text).toContain("设为默认");
     expect(response.text).toContain("置顶");
     expect(response.text).toContain("上移");
