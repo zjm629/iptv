@@ -868,6 +868,73 @@ describe("auto source discovery", () => {
     expect(result.sources[0].url).toBe("http://iptv.cqshushu.com/index.php?s=real-token&t=multicast&channels=1&format=m3u");
   });
 
+  test("trusts a visible channel-list click when raw detail source contains a decoy token", async () => {
+    const tableHtml = `
+      <table><tbody>
+      <tr>
+        <td><a onclick="gotoIP('QQouWDfUeMSBOSrDL4tQ3w','multicast')">219.144.150.164</a></td>
+        <td>200</td><td>Shaanxi Telecom</td>
+        <td>2026-07-16 06:30</td><td>2026-07-16 17:00:00</td>
+        <td><span>OK</span></td>
+      </tr>
+      </tbody></table>
+    `;
+    const fetchMock = async (url) => {
+      if (url.endsWith("/ad_verify.php")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          text: async () => "window.__ad_ok=1;"
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => tableHtml
+      };
+    };
+
+    const result = await discoverAutoSources({
+      enabled: true,
+      pageUrl: "https://iptv.cqshushu.com/index.php",
+      keywords: [],
+      maxPages: 1,
+      todayOnly: false,
+      onlyStatus: "OK",
+      browserFetch: true,
+      detailRetries: 0,
+      validateM3uUrls: false
+    }, {
+      fetchImpl: fetchMock,
+      browserClickHtmlImpl: async () => ({
+        html: `
+          <div>IP detail: 219.144.150.164</div>
+          <a href="?s=mxrI1vQBD0n1IfS5SKBXZg&t=multicast">Channel list</a>
+        `,
+        sourceHtml: `
+          <div>IP detail: 219.144.150.164</div>
+          <a href="?s=YcTgjjkMaI0eUh9Sqb9e7Q&t=multicast">Channel list</a>
+        `,
+        finalUrl: "https://iptv.cqshushu.com/index.php?p=QQouWDfUeMSBOSrDL4tQ3w&t=multicast",
+        channelListHtml: `
+          <a href="#"
+             onclick="copyToClipboard('http://iptv.cqshushu.com/index.php?s=mxrI1vQBD0n1IfS5SKBXZg&amp;t=multicast&amp;channels=1&amp;format=m3u'); return false;"
+             title="M3U interface">M3U interface</a>
+        `,
+        channelListFinalUrl: "https://iptv.cqshushu.com/index.php?s=mxrI1vQBD0n1IfS5SKBXZg&t=multicast",
+        channelListClickedHref: "https://iptv.cqshushu.com/index.php?s=mxrI1vQBD0n1IfS5SKBXZg&t=multicast",
+        channelListSelection: "visible-dom"
+      }),
+      now: new Date("2026-07-16T12:00:00+08:00")
+    });
+
+    expect(result.sources[0].url).toBe(
+      "http://iptv.cqshushu.com/index.php?s=mxrI1vQBD0n1IfS5SKBXZg&t=multicast&channels=1&format=m3u"
+    );
+  });
+
   test("does not direct-fetch a raw-source channel URL when its trusted click lands on a different token", async () => {
     const directChannelListRequests = [];
     const events = [];

@@ -851,10 +851,15 @@ async function fetchDetailHtmlByClick(row, detailUrl, requestConfig, report = ()
     const sourceHtml = typeof rendered === "object" ? rendered.sourceHtml || "" : "";
     const channelListHtml = typeof rendered === "object" ? rendered.channelListHtml || "" : "";
     const channelListFinalUrl = typeof rendered === "object" ? rendered.channelListFinalUrl || "" : "";
+    const channelListSelection = typeof rendered === "object" ? rendered.channelListSelection || "" : "";
+    const channelListClickedText = typeof rendered === "object" ? rendered.channelListClickedText || "" : "";
+    const channelListClickedHref = typeof rendered === "object" ? rendered.channelListClickedHref || "" : "";
     const sourceChannelListUrl = parseDetailChannelListUrl(sourceHtml, startUrl);
     const sourceChannelToken = readSourceToken(startUrl, sourceChannelListUrl);
     const clickedChannelToken = readSourceToken(startUrl, channelListFinalUrl);
-    const channelListBlocked = sourceChannelListUrl && channelListHtml && sourceChannelToken && clickedChannelToken && sourceChannelToken !== clickedChannelToken
+    const trustedVisibleClick = channelListSelection === "visible-dom";
+    const channelListBlocked = !trustedVisibleClick &&
+      sourceChannelListUrl && channelListHtml && sourceChannelToken && clickedChannelToken && sourceChannelToken !== clickedChannelToken
       ? {
         reason: "source-click-mismatch",
         expectedChannelListUrl: sourceChannelListUrl,
@@ -873,6 +878,9 @@ async function fetchDetailHtmlByClick(row, detailUrl, requestConfig, report = ()
       channelListHtml,
       channelListSourceHtml: typeof rendered === "object" ? rendered.channelListSourceHtml || "" : "",
       channelListFinalUrl,
+      channelListSelection,
+      channelListClickedText,
+      channelListClickedHref,
       channelListBlocked
     };
   }
@@ -896,7 +904,11 @@ async function fetchDetailHtmlByClick(row, detailUrl, requestConfig, report = ()
         clicked: true,
         channelListHtml: rendered.channelListHtml || "",
         channelListSourceHtml: rendered.channelListSourceHtml || "",
-        channelListFinalUrl: rendered.channelListFinalUrl || ""
+        channelListFinalUrl: rendered.channelListFinalUrl || "",
+        channelListSelection: rendered.channelListSelection || "",
+        channelListClickedText: rendered.channelListClickedText || "",
+        channelListClickedHref: rendered.channelListClickedHref || "",
+        channelListBlocked: rendered.channelListBlocked || null
       };
     } catch (error) {
       const detail = error?.stderr || error?.message || error?.code || "unknown error";
@@ -1285,6 +1297,122 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
     detailPage.sourceHtml = await sourceTracker.getHtml(client, detailPage.finalUrl, commandTimeoutMs);
 
     const sourceChannelListUrl = parseDetailChannelListUrl(detailPage.sourceHtml || "", startUrl);
+    const renderedChannelListUrl = parseDetailChannelListUrl(detailPage.html || "", startUrl);
+    const preferredChannelListUrl = renderedChannelListUrl || sourceChannelListUrl;
+    const selectedChannel = await waitForChannelListCandidate(client, sessionId, requestConfig, preferredChannelListUrl);
+    if (sourceChannelListUrl && selectedChannel?.href) {
+      const sourceToken = readSourceToken(startUrl, sourceChannelListUrl);
+      const visibleToken = readSourceToken(startUrl, selectedChannel.href);
+      if (sourceToken && visibleToken && sourceToken !== visibleToken) {
+        report({
+          phase: "source:channel-list-candidate-conflict",
+          ip: row.ip,
+          typeName: row.typeName,
+          sourceChannelListUrl,
+          visibleChannelListUrl: selectedChannel.href,
+          sourceToken,
+          visibleToken,
+          chosenChannelListUrl: selectedChannel.href,
+          message: `详情页源码与可见按钮不一致，采用可见按钮：${row.ip}`
+        });
+      }
+    }
+
+    if (selectedChannel) {
+      try {
+        report({
+          phase: "source:channel-list-click",
+          ip: row.ip,
+          typeName: row.typeName,
+          channelListUrl: selectedChannel.href,
+          message: `同会话点击频道列表：${row.ip}`
+        });
+        const channelClick = await client.send("Runtime.evaluate", {
+          expression: `(() => {
+            const wantedIndex = ${JSON.stringify(selectedChannel.index)};
+            const wantedHref = ${JSON.stringify(selectedChannel.href)};
+            const links = Array.from(document.querySelectorAll("a"));
+            const link = links[wantedIndex] || links.find((item) => {
+              const href = item.href || item.getAttribute("href") || "";
+              return href === wantedHref;
+            });
+            if (!link) {
+              return { clicked: false, href: location.href, linkCount: links.length, text: document.body ? document.body.innerText.slice(0, 240) : "" };
+            }
+            link.scrollIntoView({ block: "center", inline: "center" });
+            const rect = link.getBoundingClientRect();
+            return {
+              clicked: true,
+              href: location.href,
+              text: link.textContent || "",
+              linkHref: link.href || link.getAttribute("href") || "",
+              rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+            };
+          })()`,
+          returnByValue: true
+        }, sessionId, commandTimeoutMs);
+        const channelClicked = channelClick?.result?.value;
+        if (!channelClicked?.clicked) {
+          throw new Error(`Could not find channel list link on detail page: ${JSON.stringify(channelClicked || {})}`);
+        }
+        await dispatchTrustedClick(client, sessionId, centerPointFromRect(channelClicked.rect), commandTimeoutMs);
+        const channelPage = await waitForStablePage(client, sessionId, requestConfig, detailPage.finalUrl, { requireUrlChange: true });
+        const actualChannelListUrl = normalizeChannelListUrl(startUrl, channelPage.finalUrl);
+        channelPage.sourceHtml = await sourceTracker.getHtml(client, channelPage.finalUrl, commandTimeoutMs);
+        if (!actualChannelListUrl) {
+          report({
+            phase: "source:channel-list-redirect-home",
+            ip: row.ip,
+            typeName: row.typeName,
+            channelListUrl: selectedChannel.href,
+            finalUrl: channelPage.finalUrl,
+            clickedText: channelClicked.text,
+            clickedLinkHref: channelClicked.linkHref,
+            message: `频道列表点击后回到首页：${row.ip}`
+          });
+          return {
+            ...detailPage,
+            channelListSelection: "visible-dom",
+            channelListClickedText: channelClicked.text,
+            channelListClickedHref: channelClicked.linkHref,
+            channelListBlocked: {
+              reason: "visible-click-redirect-home",
+              expectedChannelListUrl: selectedChannel.href,
+              actualChannelListUrl: channelPage.finalUrl
+            }
+          };
+        }
+        return {
+          ...detailPage,
+          channelListHtml: channelPage.html,
+          channelListSourceHtml: channelPage.sourceHtml || "",
+          channelListFinalUrl: actualChannelListUrl,
+          channelListClickedText: channelClicked.text,
+          channelListClickedHref: channelClicked.linkHref,
+          channelListSelection: "visible-dom"
+        };
+      } catch (error) {
+        report({
+          phase: "source:channel-list-click-error",
+          ip: row.ip,
+          typeName: row.typeName,
+          channelListUrl: selectedChannel.href,
+          error: formatFetchError(error, requestConfig),
+          message: `同会话频道列表点击失败：${row.ip}`
+        });
+        return {
+          ...detailPage,
+          channelListSelection: "visible-dom",
+          channelListClickedHref: selectedChannel.href,
+          channelListBlocked: {
+            reason: "visible-click-error",
+            expectedChannelListUrl: selectedChannel.href,
+            error: formatFetchError(error, requestConfig)
+          }
+        };
+      }
+    }
+
     if (sourceChannelListUrl) {
       try {
         report({
@@ -1292,7 +1420,7 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
           ip: row.ip,
           typeName: row.typeName,
           channelListUrl: sourceChannelListUrl,
-          message: `按详情页源码打开频道列表：${row.ip}`
+          message: `未找到可见按钮，按详情页源码打开频道列表：${row.ip}`
         });
         await dispatchTrustedLinkClick(client, sessionId, sourceChannelListUrl, commandTimeoutMs);
         const channelPage = await waitForStablePage(client, sessionId, requestConfig, detailPage.finalUrl, { requireUrlChange: true });
@@ -1307,7 +1435,8 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
             channelListSourceHtml: channelPage.sourceHtml || "",
             channelListFinalUrl: actualChannelListUrl,
             channelListClickedText: "source-html",
-            channelListClickedHref: sourceChannelListUrl
+            channelListClickedHref: sourceChannelListUrl,
+            channelListSelection: "source-html"
           };
         }
         report({
@@ -1322,6 +1451,7 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
         });
         return {
           ...detailPage,
+          channelListSelection: "source-html",
           channelListBlocked: {
             reason: "source-click-mismatch",
             expectedChannelListUrl: sourceChannelListUrl,
@@ -1341,6 +1471,7 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
         });
         return {
           ...detailPage,
+          channelListSelection: "source-html",
           channelListBlocked: {
             reason: "source-click-error",
             expectedChannelListUrl: sourceChannelListUrl,
@@ -1350,83 +1481,7 @@ async function renderHtmlWithChromiumClick(command, startUrl, detailUrl, row, re
       }
     }
 
-    const preferredChannelListUrl = parseDetailChannelListUrl(detailPage.sourceHtml || detailPage.html, startUrl);
-    const selectedChannel = await waitForChannelListCandidate(client, sessionId, requestConfig, preferredChannelListUrl);
-    if (!selectedChannel) {
-      return detailPage;
-    }
-    try {
-      report({
-        phase: "source:channel-list-click",
-        ip: row.ip,
-        typeName: row.typeName,
-        channelListUrl: selectedChannel.href,
-        message: `同会话点击频道列表：${row.ip}`
-      });
-      const channelClick = await client.send("Runtime.evaluate", {
-        expression: `(() => {
-          const wantedIndex = ${JSON.stringify(selectedChannel.index)};
-          const wantedHref = ${JSON.stringify(selectedChannel.href)};
-          const links = Array.from(document.querySelectorAll("a"));
-          const link = links[wantedIndex] || links.find((item) => {
-            const href = item.href || item.getAttribute("href") || "";
-            return href === wantedHref;
-          });
-          if (!link) {
-            return { clicked: false, href: location.href, linkCount: links.length, text: document.body ? document.body.innerText.slice(0, 240) : "" };
-          }
-          link.scrollIntoView({ block: "center", inline: "center" });
-          const rect = link.getBoundingClientRect();
-          return {
-            clicked: true,
-            href: location.href,
-            text: link.textContent || "",
-            linkHref: link.href || link.getAttribute("href") || "",
-            rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-          };
-        })()`,
-        returnByValue: true
-      }, sessionId, commandTimeoutMs);
-      const channelClicked = channelClick?.result?.value;
-      if (!channelClicked?.clicked) {
-        throw new Error(`Could not find channel list link on detail page: ${JSON.stringify(channelClicked || {})}`);
-      }
-      await dispatchTrustedClick(client, sessionId, centerPointFromRect(channelClicked.rect), commandTimeoutMs);
-      const channelPage = await waitForStablePage(client, sessionId, requestConfig, detailPage.finalUrl, { requireUrlChange: true });
-      const actualChannelListUrl = normalizeChannelListUrl(startUrl, channelPage.finalUrl);
-      channelPage.sourceHtml = await sourceTracker.getHtml(client, channelPage.finalUrl, commandTimeoutMs);
-      if (!actualChannelListUrl) {
-        report({
-          phase: "source:channel-list-redirect-home",
-          ip: row.ip,
-          typeName: row.typeName,
-          channelListUrl: selectedChannel.href,
-          finalUrl: channelPage.finalUrl,
-          clickedText: channelClicked.text,
-          clickedLinkHref: channelClicked.linkHref,
-          message: `频道列表点击后回到首页：${row.ip}`
-        });
-        return detailPage;
-      }
-      return {
-        ...detailPage,
-        channelListHtml: channelPage.html,
-        channelListSourceHtml: channelPage.sourceHtml || "",
-        channelListFinalUrl: actualChannelListUrl,
-        channelListClickedText: channelClicked.text,
-        channelListClickedHref: channelClicked.linkHref
-      };
-    } catch (error) {
-      report({
-        phase: "source:channel-list-click-error",
-        ip: row.ip,
-        typeName: row.typeName,
-        channelListUrl: selectedChannel.href,
-        error: formatFetchError(error, requestConfig),
-        message: `同会话频道列表点击失败：${row.ip}`
-      });
-      return detailPage;
-    }
+    return detailPage;
   } finally {
     sourceTracker?.close();
     client?.close();
@@ -1718,7 +1773,10 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
     const detailValidation = detail.response.ok
       ? validateDetailPageForRow(detailParseHtml, row, requestConfig.pageUrl)
       : { ok: false, channelListUrl: "", summary: summarizeHtmlPage(detailParseHtml), hasExpectedIp: false, expectedIp: row.ip };
-    const channelListUrl = detailValidation.channelListUrl;
+    const trustedVisibleChannelListUrl = detail.channelListSelection === "visible-dom"
+      ? normalizeChannelListUrl(requestConfig.pageUrl, detail.channelListFinalUrl || "")
+      : "";
+    const channelListUrl = trustedVisibleChannelListUrl || detailValidation.channelListUrl;
     if (detail.response.ok && detail.clicked === true && !detailValidation.ok) {
       lastDetailSummary = detailValidation.summary;
       report({
@@ -1799,7 +1857,7 @@ async function resolveDetailM3uUrl(fetchImpl, row, requestConfig, sleepImpl, rep
       const clickedChannelUrl = detail.channelListFinalUrl || "";
       const clickedChannelToken = readSourceToken(requestConfig.pageUrl, clickedChannelUrl);
       const canUseClickedChannelList = channelListParseHtml &&
-        (!detail.sourceHtml || !expectedChannelToken || !clickedChannelToken || clickedChannelToken === expectedChannelToken);
+        (detail.channelListSelection === "visible-dom" || !detail.sourceHtml || !expectedChannelToken || !clickedChannelToken || clickedChannelToken === expectedChannelToken);
       if (channelListParseHtml && !canUseClickedChannelList) {
         report({
           phase: "source:channel-list-polluted",
@@ -2490,7 +2548,10 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
     return result;
   }
   const detailParseHtml = detail.sourceHtml || detail.html;
-  const channelListUrl = detail.response.ok ? parseDetailChannelListUrl(detailParseHtml, config.pageUrl) : "";
+  const trustedVisibleChannelListUrl = detail.channelListSelection === "visible-dom"
+    ? normalizeChannelListUrl(config.pageUrl, detail.channelListFinalUrl || "")
+    : "";
+  const channelListUrl = trustedVisibleChannelListUrl || (detail.response.ok ? parseDetailChannelListUrl(detailParseHtml, config.pageUrl) : "");
   const detailExpectedToken = readSourceToken(config.pageUrl, channelListUrl);
   result.detail = {
     url: detailUrl,
@@ -2520,7 +2581,7 @@ export async function debugAutoSourceByIp(configValue = {}, targetIp = "", optio
     const channelListParseHtml = detail.channelListSourceHtml || detail.channelListHtml;
     const clickedChannelToken = readSourceToken(config.pageUrl, detail.channelListFinalUrl || "");
     const canUseClickedChannelList = channelListParseHtml &&
-      (!detail.sourceHtml || !detailExpectedToken || !clickedChannelToken || clickedChannelToken === detailExpectedToken);
+      (detail.channelListSelection === "visible-dom" || !detail.sourceHtml || !detailExpectedToken || !clickedChannelToken || clickedChannelToken === detailExpectedToken);
     if (canUseClickedChannelList) {
       channelList = {
         response: { ok: true, status: 200 },

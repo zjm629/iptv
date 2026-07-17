@@ -405,6 +405,7 @@ export function renderHomePage(options = {}) {
         "<input class='source-url' placeholder='M3U 地址，例如 https://example.com/list.m3u' value='" + escapeHtml(source.url) + "'>" +
         "<span class='source-actions'>" +
         (source.hidden ? "<span class='badge'>已隐藏</span>" : "") +
+        "<button class='secondary play-source' data-index='" + index + "'>播放</button>" +
         "<button class='linklike move-source' data-index='" + index + "' data-direction='top' " + (index === 0 ? "disabled" : "") + ">置顶</button>" +
         "<button class='linklike move-source' data-index='" + index + "' data-direction='up' " + (index === 0 ? "disabled" : "") + ">上移</button>" +
         "<button class='linklike move-source' data-index='" + index + "' data-direction='down' " + (index === rows.length - 1 ? "disabled" : "") + ">下移</button>" +
@@ -420,6 +421,13 @@ export function renderHomePage(options = {}) {
           const index = Number(button.dataset.index);
           state.sources[index].hidden = !state.sources[index].hidden;
           renderSources();
+        });
+      });
+      document.querySelectorAll(".play-source").forEach((button) => {
+        button.addEventListener("click", () => {
+          syncSourcesFromInputs();
+          const source = state.sources[Number(button.dataset.index)];
+          openPotPlayer(source?.url);
         });
       });
       document.querySelectorAll(".move-source").forEach((button) => {
@@ -807,8 +815,16 @@ export function renderHomePage(options = {}) {
       $("copy").textContent = "已复制";
       setTimeout(() => $("copy").textContent = "复制播放列表地址", 1200);
     });
+    function openPotPlayer(url) {
+      const targetUrl = String(url || "").trim();
+      if (!targetUrl) {
+        $("source-message").textContent = "请先填写要播放的源地址";
+        return;
+      }
+      window.location.href = "potplayer://" + targetUrl;
+    }
     $("live-m3u-potplayer").addEventListener("click", () => {
-      window.location.href = "potplayer://" + window.location.origin + "/live.m3u";
+      openPotPlayer(window.location.origin + "/live.m3u");
     });
     $("refresh").addEventListener("click", async () => {
       $("refresh").disabled = true;

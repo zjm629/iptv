@@ -1171,6 +1171,8 @@ describe("server routes", () => {
     expect(response.text).toContain("auto-source-enabled");
     expect(response.text).toContain("toggle-source-hidden");
     expect(response.text).toContain("move-source");
+    expect(response.text).toContain("play-source");
+    expect(response.text).toContain("openPotPlayer");
     expect(response.text).toContain("playlist-sources.m3u");
     expect(response.text).toContain("live.txt");
     expect(response.text).toContain("live.m3u");
