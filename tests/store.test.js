@@ -694,6 +694,54 @@ http://a.example/cctv1.m3u8
     expect(store.getOutputChannels().map((channel) => channel.id)).toEqual(["cctv1"]);
   });
 
+  test("auto hides replay channels from output", async () => {
+    const { configPath, cachePath, overridesPath } = await createTempConfig([
+      { name: "Source A", url: "http://source-a.example/list.m3u" }
+    ]);
+    const fetchMock = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      text: async () => `#EXTM3U
+#EXTINF:-1,U17女篮世界杯 日本VS埃及 全场回放（赛场原声） 02:05
+http://a.example/replay.m3u8
+#EXTINF:-1,CCTV-5
+http://a.example/cctv5.m3u8
+`
+    });
+    const store = createStore({ configPath, cachePath, overridesPath, fetchImpl: fetchMock });
+    await store.load();
+    await store.refresh();
+
+    const replay = store.getChannels().find((channel) => channel.name.includes("全场回放"));
+    expect(replay).toEqual(expect.objectContaining({ hidden: true }));
+    expect(store.getOutputChannels().map((channel) => channel.name)).toEqual(["CCTV-5"]);
+  });
+
+  test("auto assigns trailing time event channels to sports category", async () => {
+    const { configPath, cachePath, overridesPath } = await createTempConfig([
+      { name: "Source A", url: "http://source-a.example/list.m3u" }
+    ]);
+    const fetchMock = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      text: async () => `#EXTM3U
+#EXTINF:-1,世界杯 英格兰VS阿根廷 02:45
+http://a.example/match.m3u8
+#EXTINF:-1,CCTV-1
+http://a.example/cctv1.m3u8
+`
+    });
+    const store = createStore({ configPath, cachePath, overridesPath, fetchImpl: fetchMock });
+    await store.load();
+    await store.refresh();
+
+    const event = store.getChannels().find((channel) => channel.name.includes("英格兰VS阿根廷"));
+    expect(event).toEqual(expect.objectContaining({
+      hidden: false,
+      customGroups: ["体育频道"]
+    }));
+    expect(store.getCategories()).toContain("体育频道");
+    expect(store.getOutputChannels().find((channel) => channel.id === event.id).customGroups).toEqual(["体育频道"]);
+  });
+
   test("saves category list with recommended first", async () => {
     const { configPath, cachePath, overridesPath } = await createTempConfig([]);
     const store = createStore({ configPath, cachePath, overridesPath, fetchImpl: jest.fn() });

@@ -4,6 +4,8 @@ import { debugAutoSourceByIp, discoverAutoSources as discoverAutoSourcesFromPage
 import { parseM3u } from "./m3u.js";
 import { normalizeChannelName } from "./normalize.js";
 
+const SPORTS_CATEGORY = "体育频道";
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -305,6 +307,14 @@ function isLowQualitySdChannelName(name) {
   return /SD$/i.test(String(name || "").trim());
 }
 
+function isReplayChannelName(name) {
+  return String(name || "").includes("回放");
+}
+
+function isTrailingTimeEventChannelName(name) {
+  return /(?:^|[\s　])(?:[01]?\d|2[0-3])[:：][0-5]\d\s*$/.test(String(name || "").trim());
+}
+
 export function createStore(options = {}) {
   const configPath = options.configPath || process.env.SOURCES_PATH || path.join(process.cwd(), "config", "sources.json");
   const cachePath = options.cachePath || process.env.CACHE_PATH || path.join(process.cwd(), "data", "cache.json");
@@ -322,7 +332,13 @@ export function createStore(options = {}) {
 
   function decorateChannel(channel) {
     const override = normalizeOverride(overrides.channels[channel.id]);
-    const autoHidden = isGeneratedDateChannelName(channel.name) || isLowQualitySdChannelName(channel.name);
+    const autoHidden = isGeneratedDateChannelName(channel.name) ||
+      isLowQualitySdChannelName(channel.name) ||
+      isReplayChannelName(channel.name);
+    const autoGroups = !autoHidden && isTrailingTimeEventChannelName(channel.name)
+      ? [SPORTS_CATEGORY]
+      : [];
+    const customGroups = Array.from(new Set([...override.customGroups, ...autoGroups]));
     const disabledUrls = new Set(override.disabledSourceUrls);
     const decoratedSources = channel.sources.map((source, index) => ({
       ...source,
@@ -335,7 +351,7 @@ export function createStore(options = {}) {
       ...channel,
       hidden: override.hidden || autoHidden,
       sortOrder: override.sortOrder,
-      customGroups: override.customGroups,
+      customGroups,
       defaultSourceIndex: decoratedSources.find((source) => source.preferred && !source.disabled)?.sourceIndex ?? 0,
       sources: decoratedSources
     };
@@ -597,7 +613,13 @@ export function createStore(options = {}) {
       return debugAutoSourceByIp(config || autoSourceConfig, ip, { fetchImpl, now });
     },
     getCategories() {
-      return normalizeCategories(overrides.categories);
+      const categories = normalizeCategories(overrides.categories);
+      const hasSportsChannel = getDecoratedChannels().some((channel) =>
+        !channel.hidden && channel.customGroups.includes(SPORTS_CATEGORY)
+      );
+      return hasSportsChannel && !categories.includes(SPORTS_CATEGORY)
+        ? [...categories, SPORTS_CATEGORY]
+        : categories;
     },
     async saveCategories(categories) {
       overrides.categories = normalizeCategories(categories);
